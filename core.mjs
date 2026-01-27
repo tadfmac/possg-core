@@ -2,6 +2,8 @@
 // possg core
 // (C)2026 by D.F.Mac.@TripArts Music
 
+const DBG = false;
+
 import fs from "fs-extra";
 import path from "path";
 import unzipper from "unzipper";
@@ -15,49 +17,52 @@ import FmParser from "./libs/fmparser.mjs";
 
 class PossgCore{
   constructor(config){
+    if(DBG) console.log("PossgCore.constructor()");
     this.ROOT = process.cwd();
-    console.log("ROOT = "+this.ROOT);
+    if(DBG) console.log("ROOT = "+this.ROOT);
     this.WWW_ROOT = path.join(this.ROOT, config.WWW_DIR); //WWW_DIR = "www"
-    console.log("WWW_ROOT = "+this.WWW_ROOT);
+    if(DBG) console.log("WWW_ROOT = "+this.WWW_ROOT);
     this.CONTENT_ROOT = path.join(this.WWW_ROOT,config.CONTENT_DIR); // CONTENT_DIR = "contents"
-    console.log("CONTENT_ROOT = "+this.CONTENT_ROOT);
+    if(DBG) console.log("CONTENT_ROOT = "+this.CONTENT_ROOT);
     this.STAGING_ROOT = path.join(this.WWW_ROOT,config.STAGING_DIR); // STAGING_DIR = "staging"
-    console.log("STAGING_ROOT = "+this.STAGING_ROOT);
+    if(DBG) console.log("STAGING_ROOT = "+this.STAGING_ROOT);
     this.TMP_PATH = path.join(this.ROOT,config.TMP_DIR); // TMP_DIR = ".tmp"
-    console.log("TMP_PATH = "+this.TMP_PATH);
+    if(DBG) console.log("TMP_PATH = "+this.TMP_PATH);
     this.DB_ROOT = path.join(this.ROOT,config.DB_DIR); // DB_DIR = "db"
-    console.log("DB_ROOT = "+this.DB_ROOT);
+    if(DBG) console.log("DB_ROOT = "+this.DB_ROOT);
     this.DB_PATH = path.join(this.DB_ROOT,config.DB_FILE_NAME); // DB_FILE_NAME = "articles.db"
-    console.log("DB_PATH = "+this.DB_PATH);
+    if(DBG) console.log("DB_PATH = "+this.DB_PATH);
     this.STAGING_URL_BASE = config.STAGING_URL_BASE; // STAGING_URL_BASE = "/staging"
-    console.log("STAGING_URL_BASE = "+this.STAGING_URL_BASE);
+    if(DBG) console.log("STAGING_URL_BASE = "+this.STAGING_URL_BASE);
     this.CONTENT_URL_BASE = config.CONTENT_URL_BASE; // CONTENT_URL_BASE = ""
-    console.log("CONTENT_URL_BASE = "+this.CONTENT_URL_BASE);
+    if(DBG) console.log("CONTENT_URL_BASE = "+this.CONTENT_URL_BASE);
     this.TEMPLATE_ROOT = path.join(this.ROOT,config.TEMPLATE_DIR) // TEMPLATE_DIR = "template"
-    console.log("TEMPLATE_ROOT = "+this.TEMPLATE_ROOT);
+    if(DBG) console.log("TEMPLATE_ROOT = "+this.TEMPLATE_ROOT);
     this.TEMPLATE_PATH = path.join(this.TEMPLATE_ROOT,config.TEMPLATE_FILE_NAME); // TEMPLATE_FILE_NAME = "content-template.ejs"
-    console.log("TEMPLATE_PATH = "+this.TEMPLATE_PATH);
+    if(DBG) console.log("TEMPLATE_PATH = "+this.TEMPLATE_PATH);
     this.IDX_TEMPLATE_PATH = path.join(this.TEMPLATE_ROOT,config.IDX_TEMPLATE_FILE_NAME); // IDX_TEMPLATE_FILE_NAME = "index-template.ejs"
-    console.log("IDX_TEMPLATE_PATH = "+this.IDX_TEMPLATE_PATH);
+    if(DBG) console.log("IDX_TEMPLATE_PATH = "+this.IDX_TEMPLATE_PATH);
     this.fmParser = new FmParser(config.frontmatter);
     this.GA_ID = config.GA_ID;
-    console.log("GA_ID = "+this.GA_ID);
+    if(DBG) console.log("GA_ID = "+this.GA_ID);
     this.BLOGTITLE = config.BLOGTITLE;
-    console.log("BLOGTITLE = "+this.BLOGTITLE);
+    if(DBG) console.log("BLOGTITLE = "+this.BLOGTITLE);
     this.FOOTERTEXT = config.FOOTERTEXT;
-    console.log("FOOTERTEXT = "+this.FOOTERTEXT);
+    if(DBG) console.log("FOOTERTEXT = "+this.FOOTERTEXT);
     this.BLOGDESC = config.BLOGDESC;
-    console.log("BLOGDESC = "+this.BLOGDESC);
+    if(DBG) console.log("BLOGDESC = "+this.BLOGDESC);
     this.INDEX_PAGE_SIZE = config.INDEX_PAGE_SIZE;
-    console.log("INDEX_PAGE_SIZE = "+this.INDEX_PAGE_SIZE);
+    if(DBG) console.log("INDEX_PAGE_SIZE = "+this.INDEX_PAGE_SIZE);
   }
   async init(){
+    if(DBG) console.log("PossgCore.init()");
     await fs.ensureDir(this.DB_ROOT);
     this.db = new Datastore({ filename: this.DB_PATH, autoload: true });
     this.md = new MarkdownIt({html: true})
       .use(markdownItImageFigures, {figcaption: true,copyAttrs: true});;
   }
   async import(zipPath){
+    if(DBG) console.log("PossgCore.import() zipPath = "+zipPath);
     if (!zipPath) throw new Error("zip required");
 
     const key = path.basename(zipPath, ".zip");
@@ -104,6 +109,7 @@ class PossgCore{
   }
 
   async renderArticle({ key, isStaging }) {
+    if(DBG) console.log("PossgCore.renderArticle() key = "+key+" isStaging = "+isStaging);
     const article = await new Promise(r =>
       this.db.findOne({ _id: key }, (_, d) => r(d))
     );
@@ -162,6 +168,7 @@ class PossgCore{
   }
 
   buildNav({ articles, current, isStaging }) {
+    if(DBG) console.log("PossgCore.buildNav()");
     const year = current.datetime.slice(0, 4);
     const byYear = {};
     for (const a of articles) {
@@ -203,6 +210,7 @@ class PossgCore{
   }
   
   async rebuildNavAround({ year, isStaging }) {
+    if(DBG) console.log("PossgCore.rebuildNavAround() year = "+year+" isStaging = "+isStaging);
     const query = isStaging ? { release: false } : { release: true };
 
     const articles = await new Promise((resolve) => {
@@ -252,6 +260,7 @@ class PossgCore{
     }
   }
   async publish(key,isRelease){
+    if(DBG) console.log("PossgCore.publish() key = "+key+" isRelease = "+isRelease);
     const article = await new Promise((resolve) =>{
       this.db.findOne({ _id: key }, (_, d) => {
         resolve(d);
@@ -286,6 +295,7 @@ class PossgCore{
     await this.rebuildIndexes();
   }
   async removeAll() {
+    if(DBG) console.log("PossgCore.removeAll()");
     await new Promise((resolve, reject) => {
       this.db.remove({}, { multi: true }, (err) => {
         (err)? reject(err) : resolve();
@@ -296,6 +306,7 @@ class PossgCore{
     await this.rebuildIndexes();
   }
   async remove(key){
+    if(DBG) console.log("PossgCore.remove() key = "+key);
     if (!key) {
       throw new Error("key is required");
     }
@@ -327,6 +338,7 @@ class PossgCore{
     return {key,title: article.title,year};
   }
   async buildAll() {
+    if(DBG) console.log("PossgCore.buildAll()");
     const articles = await new Promise((resolve) => {
       this.db.find({}, (_, docs) => {
         resolve(docs);
@@ -353,6 +365,7 @@ class PossgCore{
     await this.rebuildIndexes();
   }
   async rebuildIndexes() {
+    if(DBG) console.log("PossgCore.rebuildIndexes()");
     await this.#cleanIndexPages(this.STAGING_ROOT);
     await this.#cleanIndexPages(this.CONTENT_ROOT);
     await this.buildIndex({ isStaging: true });
@@ -364,8 +377,6 @@ class PossgCore{
       const targets = files.filter(
         name => name === "index.html" || /^index-\d+\.html$/.test(name)
       );
-console.log(outDir)
-console.dir(targets)
       for (const file of targets) {
         await fs.remove(path.join(outDir, file));
       }
@@ -374,6 +385,7 @@ console.dir(targets)
     }
   }
   async buildIndex({ isStaging }) {
+    if(DBG) console.log("PossgCore.buildIndex() isStaging = "+isStaging);
     const query = isStaging ? {} : { release: true };
 
     const articles = await new Promise(resolve => {
