@@ -1,0 +1,21 @@
+{
+  "name": "possg-core",
+  "version": "0.0.1",
+  "description": "possg core",
+  "type": "module",
+  "main": "core.mjs",
+  "author": "D.F.Mac.@TripArts Music",
+  "license": "MIT",
+  "dependencies": {
+    "@seald-io/nedb": "^4.1.2",
+    "date-utils": "^1.2.21",
+    "ejs": "^4.0.1",
+    "fs-extra": "^11.3.3",
+    "gray-matter": "^4.0.3",
+    "install": "^0.13.0",
+    "markdown-it": "^14.1.0",
+    "markdown-it-image-figures": "^2.1.1",
+    "npm": "^11.8.0",
+    "unzipper": "^0.12.3"
+  }
+}
