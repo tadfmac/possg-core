@@ -353,8 +353,8 @@ class PossgCore{
     await this.rebuildIndexes();
   }
   async rebuildIndexes() {
-    this.#cleanIndexPages(this.STAGING_ROOT);
-    this.#cleanIndexPages(this.CONTENT_ROOT);
+    await this.#cleanIndexPages(this.STAGING_ROOT);
+    await this.#cleanIndexPages(this.CONTENT_ROOT);
     await this.buildIndex({ isStaging: true });
     await this.buildIndex({ isStaging: false });
   }
@@ -364,7 +364,8 @@ class PossgCore{
       const targets = files.filter(
         name => name === "index.html" || /^index-\d+\.html$/.test(name)
       );
-
+console.log(outDir)
+console.dir(targets)
       for (const file of targets) {
         await fs.remove(path.join(outDir, file));
       }
