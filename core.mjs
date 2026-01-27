@@ -48,6 +48,8 @@ class PossgCore{
     console.log("FOOTERTEXT = "+this.FOOTERTEXT);
     this.BLOGDESC = config.BLOGDESC;
     console.log("BLOGDESC = "+this.BLOGDESC);
+    this.INDEX_PAGE_SIZE = config.INDEX_PAGE_SIZE;
+    console.log("INDEX_PAGE_SIZE = "+this.INDEX_PAGE_SIZE);
   }
   async init(){
     await fs.ensureDir(this.DB_ROOT);
@@ -332,9 +334,7 @@ class PossgCore{
     });
 
     const years = new Set(
-      articles.map((a) => {
-        a.datetime.slice(0, 4);
-      })
+      articles.map((a) => a.datetime.slice(0, 4))
     );
 
     for (const article of articles) {
@@ -353,48 +353,76 @@ class PossgCore{
     await this.rebuildIndexes();
   }
   async rebuildIndexes() {
+    this.#cleanIndexPages(this.STAGING_ROOT);
+    this.#cleanIndexPages(this.CONTENT_ROOT);
     await this.buildIndex({ isStaging: true });
     await this.buildIndex({ isStaging: false });
+  }
+  async #cleanIndexPages(outDir) {
+    try {
+      const files = await fs.readdir(outDir);
+      const targets = files.filter(
+        name => name === "index.html" || /^index-\d+\.html$/.test(name)
+      );
+
+      for (const file of targets) {
+        await fs.remove(path.join(outDir, file));
+      }
+    } catch {
+      // outDir が存在しない場合は無視
+    }
   }
   async buildIndex({ isStaging }) {
     const query = isStaging ? {} : { release: true };
 
-    const articles = await new Promise((resolve) => {
-      this.db.find(query, (_, docs) => {
-        resolve(docs);
-      });
+    const articles = await new Promise(resolve => {
+      this.db.find(query, (_, docs) => resolve(docs));
     });
 
     const sorted = articles
       .filter(a => a.datetime)
-      .sort((a, b) => b.datetime.localeCompare(a.datetime))
-      .slice(0, 10);
+      .sort((a, b) => b.datetime.localeCompare(a.datetime));
 
+    const totalPages = Math.max(1,Math.ceil(sorted.length / this.INDEX_PAGE_SIZE));
     const baseUrl = (isStaging)? this.STAGING_URL_BASE : this.CONTENT_URL_BASE;
+    const outDir = (isStaging)? this.STAGING_ROOT : this.CONTENT_ROOT;
 
-    const items = sorted.map(a => ({
-      datetime: this.#formatDateTime(a.datetime),
-      bodytext: this.#plainTextFromMd(a.body,60),
-      title: a.title,
-      link: `${baseUrl}/${a.datetime.slice(0, 4)}/${a._id}/`
-    }));
-
-    const html = await ejs.renderFile(
-      path.join(this.TEMPLATE_ROOT, "index-template.ejs"),
-      { 
-        items:items,
-        blogtitle:this.BLOGTITLE,
-        blogdesc:this.BLOGDESC,
-        footertext:this.FOOTERTEXT,
-        gaid:this.GA_ID
-      }
-    );
-
-    const outDir = isStaging ? this.STAGING_ROOT : this.CONTENT_ROOT;
     await fs.ensureDir(outDir);
-    await fs.writeFile(path.join(outDir, "index.html"), html);
-  }
 
+    for (let page = 1; page <= totalPages; page++) {
+      const start = (page - 1) * this.INDEX_PAGE_SIZE;
+      const end = start + this.INDEX_PAGE_SIZE;
+
+      const pageItems = sorted.slice(start, end);
+
+      const items = pageItems.map(a => ({
+        datetime: this.#formatDateTime(a.datetime),
+        bodytext: this.#plainTextFromMd(a.body, 60),
+        title: a.title,
+        link: `${baseUrl}/${a.datetime.slice(0, 4)}/${a._id}/`,
+      }));
+
+      const html = await ejs.renderFile(path.join(this.TEMPLATE_ROOT, "index-template.ejs"),
+        {
+          items,
+          blogtitle: this.BLOGTITLE,
+          blogdesc: this.BLOGDESC,
+          footertext: this.FOOTERTEXT,
+          gaid: this.GA_ID,
+          currentPage: page,
+          totalPages,
+          prevPage: page > 1 ? page - 1 : null,
+          nextPage: page < totalPages ? page + 1 : null,
+        });
+
+      const filename = (page === 1)? "index.html" : `index-${page}.html`;
+
+      await fs.writeFile(
+        path.join(outDir, filename),
+        html
+      );
+    }
+  }
 }
 
 export default PossgCore;
