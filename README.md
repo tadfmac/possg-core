@@ -36,9 +36,24 @@
 
 > template更新後に記事を再生成したい場合などにご利用ください。
 
-## 利用方法
+## 利用方法（開発中）
 
-T.B.D.
+現在開発中のため、まだ npm package には登録していません。    
+下記手順でご利用ください。    
+
+```
+git clone https://github.com/tadfmac/possg-core.git
+cd possg-core
+npm i
+npm link
+```
+
+他のpossgアプリからこのcoreを利用するには、
+possgアプリのディレクトリ配下で下記コマンドを実行してください。
+
+```
+npm link possg-core
+```
 
 ## ライセンス
 
