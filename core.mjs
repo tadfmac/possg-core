@@ -168,8 +168,10 @@ class PossgCore{
   }
 
   buildNav({ articles, current, isStaging }) {
-    if(DBG) console.log("PossgCore.buildNav()");
+    if (DBG) console.log("PossgCore.buildNav()");
+
     const year = current.datetime.slice(0, 4);
+
     const byYear = {};
     for (const a of articles) {
       const y = a.datetime.slice(0, 4);
@@ -177,35 +179,49 @@ class PossgCore{
       byYear[y].push(a);
     }
 
-    Object.values(byYear).forEach(list =>
-      list.sort((a, b) => b.datetime.localeCompare(a.datetime))
-    );
+    for (const list of Object.values(byYear)) {
+      list.sort((a, b) => b.datetime.localeCompare(a.datetime));
+    }
 
-    const years = Object.keys(byYear).sort((a, b) => b - a);
-    const idx = years.indexOf(year);
+    const years = Object.keys(byYear).sort((a, b) => Number(b) - Number(a));
+    const idx = years.indexOf(year); // -1 の可能性あり
 
     const base = isStaging ? this.STAGING_URL_BASE : this.CONTENT_URL_BASE;
 
-    return {
-      currentYear: year,
-      currentYearArticles: byYear[year].map(a => ({
+    const currentYearArticles = (byYear[year] ?? []).map(a => {
+      const linkBase = a.release
+        ? this.CONTENT_URL_BASE
+        : this.STAGING_URL_BASE;
+
+      return {
         id: a._id,
         title: a.title,
         date: this.#formatMMDD(a.datetime),
-        link: `${base}/${year}/${a._id}/`,
-      })),
-      prevYear: years[idx - 1]
+        link: `${linkBase}/${year}/${a._id}/`,
+      };
+    });
+
+    const prevYear =
+      idx > 0 && byYear[years[idx - 1]]?.length
         ? {
-          year: years[idx - 1],
-          link: `${base}/${years[idx - 1]}/${byYear[years[idx - 1]].at(-1)._id}/`,
+            year: years[idx - 1],
+            link: `${base}/${years[idx - 1]}/${byYear[years[idx - 1]].at(-1)._id}/`,
           }
-        : null,
-      nextYear: years[idx + 1]
+        : null;
+
+    const nextYear =
+      idx !== -1 && idx < years.length - 1 && byYear[years[idx + 1]]?.length
         ? {
-          year: years[idx + 1],
-          link: `${base}/${years[idx + 1]}/${byYear[years[idx + 1]][0]._id}/`,
+            year: years[idx + 1],
+            link: `${base}/${years[idx + 1]}/${byYear[years[idx + 1]][0]._id}/`,
           }
-        : null,
+        : null;
+
+    return {
+      currentYear: year,
+      currentYearArticles,
+      prevYear,
+      nextYear,
     };
   }
   
@@ -267,9 +283,8 @@ class PossgCore{
       });
     });
     if (!article) throw "not found";
-    article.release = isRelease;
     await new Promise((resolve) => {
-      this.db.update({ _id: key }, { $set: { isRelease } }, {}, ()=>{
+      this.db.update({ _id: key }, { $set: { release:isRelease } }, {}, ()=>{
         resolve();
       })
     });
@@ -408,12 +423,18 @@ class PossgCore{
 
       const pageItems = sorted.slice(start, end);
 
-      const items = pageItems.map(a => ({
-        datetime: this.#formatDateTime(a.datetime),
-        bodytext: this.#plainTextFromMd(a.body, 60),
-        title: a.title,
-        link: `${baseUrl}/${a.datetime.slice(0, 4)}/${a._id}/`,
-      }));
+      const items = pageItems.map(a => {
+        const linkBase = a.release
+          ? this.CONTENT_URL_BASE
+          : this.STAGING_URL_BASE;
+
+        return {
+          datetime: this.#formatDateTime(a.datetime),
+          bodytext: this.#plainTextFromMd(a.body, 60),
+          title: a.title,
+          link: `${linkBase}/${a.datetime.slice(0, 4)}/${a._id}/`,
+        };
+      });
 
       const html = await ejs.renderFile(path.join(this.TEMPLATE_ROOT, "index-template.ejs"),
         {
