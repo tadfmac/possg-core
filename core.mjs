@@ -53,6 +53,12 @@ class PossgCore{
     if(DBG) console.log("BLOGDESC = "+this.BLOGDESC);
     this.INDEX_PAGE_SIZE = config.INDEX_PAGE_SIZE;
     if(DBG) console.log("INDEX_PAGE_SIZE = "+this.INDEX_PAGE_SIZE);
+    this.ICON_URL = config.ICON_URL;
+    if(DBG) console.log("ICON_URL = "+this.ICON_URL);
+    this.RETURN_URL = config.RETURN_URL;
+    if(DBG) console.log("RETURN_URL = "+this.RETURN_URL);
+    this.RETURN_TEXT = config.RETURN_TEXT;
+    if(DBG) console.log("RETURN_TEXT = "+this.RETURN_TEXT);
   }
   async init(){
     if(DBG) console.log("PossgCore.init()");
@@ -120,6 +126,9 @@ class PossgCore{
     const nav = this.buildNav({ articles, current: article, isStaging });
     const html = await ejs.renderFile(this.TEMPLATE_PATH,
       {
+        iconurl:this.ICON_URL,
+        returnurl:this.RETURN_URL,
+        returntext:this.RETURN_TEXT,
         blogtitle:this.BLOGTITLE,
         toplink: (isStaging)? this.STAGING_URL_BASE : this.CONTENT_URL_BASE,
         footertext:this.FOOTERTEXT,
@@ -439,6 +448,9 @@ class PossgCore{
       const html = await ejs.renderFile(path.join(this.TEMPLATE_ROOT, "index-template.ejs"),
         {
           items,
+          iconurl:this.ICON_URL,
+          returnurl:this.RETURN_URL,
+          returntext:this.RETURN_TEXT,
           blogtitle: this.BLOGTITLE,
           blogdesc: this.BLOGDESC,
           footertext: this.FOOTERTEXT,
