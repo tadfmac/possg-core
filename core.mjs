@@ -11,8 +11,8 @@ import matter from "gray-matter";
 import MarkdownIt from "markdown-it";
 import markdownItImageFigures from "markdown-it-image-figures";
 import ejs from "ejs";
+import sharp from "sharp";
 import Datastore from "@seald-io/nedb";
-
 import FmParser from "./libs/fmparser.mjs";
 
 class PossgCore{
@@ -108,6 +108,27 @@ class PossgCore{
         await fs.copy(path.join(this.TMP_PATH, key, f), path.join(base, f));
       }
     }
+
+    // 画像候補取得
+    const image = this.#getIndexImage({ meta, body });
+
+    let thumbnail = null;
+    if (image && !image.startsWith("http")) {
+      const generated = await this.#generateThumbnail(base, image);
+      if (generated) {
+        thumbnail = "thumbnail.jpg";
+      }
+    }
+
+    await new Promise((res, rej) =>
+      this.db.update(
+        { _id: key },
+        { $set: { thumbnail } },
+        {},
+        e => (e ? rej(e) : res())
+      )
+    );
+
     await this.renderArticle({ key, isStaging: true });
     await this.rebuildNavAround({year,isStaging: true,});
     await this.rebuildIndexes();
@@ -175,7 +196,54 @@ class PossgCore{
     }
     return text;
   }
+  #getIndexImage(article) {
+    if (!article) return null;
 
+    // 1. frontmatter images
+    if (
+      article.meta &&
+      Array.isArray(article.meta.images) &&
+      article.meta.images.length > 0 &&
+      article.meta.images[0].name
+    ) {
+      return article.meta.images[0].name;
+    }
+    // 2. markdown の最初の ![alt](url)
+    if (article.body) {
+//      const match = article.body.match(/!\[[^\]]*\]\(([^)]+)\)/);
+      const match = article.body.match(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+    // 3. なし
+    return null;
+  }
+  #getIndexImageUrl(article, isStaging) {
+    if (!article.thumbnail) return null;
+
+    const baseUrl = isStaging
+      ? this.STAGING_URL_BASE
+      : this.CONTENT_URL_BASE;
+
+    const year = article.datetime.slice(0, 4);
+
+    return `${baseUrl}/${year}/${article._id}/${article.thumbnail}`;
+  }
+  async #generateThumbnail(articleDir, imageName) {
+    const inputPath = path.join(articleDir, imageName);
+    const outputPath = path.join(articleDir, "thumbnail.jpg");
+
+    if (!await fs.pathExists(inputPath)) return false;
+
+    await sharp(inputPath)
+      .resize(400, 300, {
+        fit: "cover",
+        position: "center"
+      }).jpeg({ quality: 80 }).toFile(outputPath);
+
+    return true;
+  }
   buildNav({ articles, current, isStaging }) {
     if (DBG) console.log("PossgCore.buildNav()");
 
@@ -432,18 +500,22 @@ class PossgCore{
 
       const pageItems = sorted.slice(start, end);
 
-      const items = pageItems.map(a => {
+      const items = [];
+      for (const a of pageItems) {
         const linkBase = a.release
           ? this.CONTENT_URL_BASE
           : this.STAGING_URL_BASE;
 
-        return {
+        const thumb = await this.#getIndexImageUrl(a, isStaging);
+
+        items.push( {
           datetime: this.#formatDateTime(a.datetime),
           bodytext: this.#plainTextFromMd(a.body, 60),
           title: a.title,
           link: `${linkBase}/${a.datetime.slice(0, 4)}/${a._id}/`,
-        };
-      });
+          image: thumb
+        });
+      }
 
       const html = await ejs.renderFile(path.join(this.TEMPLATE_ROOT, "index-template.ejs"),
         {
