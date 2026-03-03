@@ -59,6 +59,8 @@ class PossgCore{
     if(DBG) console.log("RETURN_URL = "+this.RETURN_URL);
     this.RETURN_TEXT = config.RETURN_TEXT;
     if(DBG) console.log("RETURN_TEXT = "+this.RETURN_TEXT);
+    this.THUMBNAIL = config.THUMBNAIL;
+    if(DBG) console.log("THUMBNAIL.width = "+this.THUMBNAIL.width+" height = "+this.THUMBNAIL.height);
   }
   async init(){
     if(DBG) console.log("PossgCore.init()");
@@ -237,7 +239,7 @@ class PossgCore{
     if (!await fs.pathExists(inputPath)) return false;
 
     await sharp(inputPath)
-      .resize(400, 300, {
+      .resize(this.THUMBNAIL.width, this.THUMBNAIL.height, {
         fit: "cover",
         position: "center"
       }).jpeg({ quality: 80 }).toFile(outputPath);
