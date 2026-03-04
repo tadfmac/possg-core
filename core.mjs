@@ -42,6 +42,10 @@ class PossgCore{
     if(DBG) console.log("TEMPLATE_PATH = "+this.TEMPLATE_PATH);
     this.IDX_TEMPLATE_PATH = path.join(this.TEMPLATE_ROOT,config.IDX_TEMPLATE_FILE_NAME); // IDX_TEMPLATE_FILE_NAME = "index-template.ejs"
     if(DBG) console.log("IDX_TEMPLATE_PATH = "+this.IDX_TEMPLATE_PATH);
+    this.CUSTOMFUNC_ROOT = path.join(this.ROOT,config.CUSTOMFUNC_DIR) // CUSTOMFUNC_DIR = "customfunc"
+    if(DBG) console.log("CUSTOMFUNC_ROOT = "+this.CUSTOMFUNC_ROOT);
+    this.CUSTOMFUNC_PATH = path.join(this.CUSTOMFUNC_ROOT,config.CUSTOMFUNC_FILE_NAME); // CUSTOMFUNC_FILE_NAME = "customfunc.mjs"
+    if(DBG) console.log("CUSTOMFUNC_PATH = "+this.CUSTOMFUNC_PATH);
     this.fmParser = new FmParser(config.frontmatter);
     this.GA_ID = config.GA_ID;
     if(DBG) console.log("GA_ID = "+this.GA_ID);
@@ -61,6 +65,8 @@ class PossgCore{
     if(DBG) console.log("RETURN_TEXT = "+this.RETURN_TEXT);
     this.THUMBNAIL = config.THUMBNAIL;
     if(DBG) console.log("THUMBNAIL.width = "+this.THUMBNAIL.width+" height = "+this.THUMBNAIL.height);
+    this.RELEASE_FEATURE = config.RELEASE_FEATURE;
+    if(DBG) console.log("RELEASE_FEATURE = "+this.RELEASE_FEATURE);
   }
   async init(){
     if(DBG) console.log("PossgCore.init()");
@@ -68,6 +74,7 @@ class PossgCore{
     this.db = new Datastore({ filename: this.DB_PATH, autoload: true });
     this.md = new MarkdownIt({html: true})
       .use(markdownItImageFigures, {figcaption: true,copyAttrs: true});;
+    this.customfunc = await import(this.CUSTOMFUNC_PATH);
   }
   async import(zipPath){
     if(DBG) console.log("PossgCore.import() zipPath = "+zipPath);
@@ -162,6 +169,7 @@ class PossgCore{
         currentId: key,
         gaid:this.GA_ID,
         nav,
+        func:this.customfunc
       }
     );
 
@@ -356,6 +364,10 @@ class PossgCore{
   }
   async publish(key,isRelease){
     if(DBG) console.log("PossgCore.publish() key = "+key+" isRelease = "+isRelease);
+    if(!this.RELEASE_FEATURE){
+      console.error("publish is aborted due to config.RELEASE_FEATURE is false!");
+      return;
+    }
     const article = await new Promise((resolve) =>{
       this.db.findOne({ _id: key }, (_, d) => {
         resolve(d);
@@ -533,6 +545,7 @@ class PossgCore{
           totalPages,
           prevPage: page > 1 ? page - 1 : null,
           nextPage: page < totalPages ? page + 1 : null,
+          func:this.customfunc
         });
 
       const filename = (page === 1)? "index.html" : `index-${page}.html`;
