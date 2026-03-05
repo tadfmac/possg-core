@@ -2,7 +2,7 @@
 // possg core
 // (C)2026 by D.F.Mac.@TripArts Music
 
-const DBG = false;
+const DBG = true;
 
 import fs from "fs-extra";
 import path from "path";
@@ -74,7 +74,8 @@ class PossgCore{
     this.db = new Datastore({ filename: this.DB_PATH, autoload: true });
     this.md = new MarkdownIt({html: true})
       .use(markdownItImageFigures, {figcaption: true,copyAttrs: true});;
-    this.customfunc = await import(this.CUSTOMFUNC_PATH);
+    const { default: customFunc } = await import(this.CUSTOMFUNC_PATH);
+    this.customfunc = new customFunc();
   }
   async import(zipPath){
     if(DBG) console.log("PossgCore.import() zipPath = "+zipPath);
@@ -94,6 +95,7 @@ class PossgCore{
 
     const coreData = this.fmParser.parseCore(parsed.data);
     const meta = this.fmParser.parseMeta(parsed.data);
+
 
     const { title, datetime } = coreData;
     const body = parsed.content.trim();
@@ -247,6 +249,7 @@ class PossgCore{
     if (!await fs.pathExists(inputPath)) return false;
 
     await sharp(inputPath)
+      .rotate()
       .resize(this.THUMBNAIL.width, this.THUMBNAIL.height, {
         fit: "cover",
         position: "center"

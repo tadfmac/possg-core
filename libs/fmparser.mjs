@@ -6,7 +6,7 @@ class FmParser{
     const result = {};
     for (const [key, rule] of Object.entries(this.setting.core)) {
       const raw = fm[key];
-      const value = this.#normalize(raw, rule.type);
+      const value = this.#normalize(raw, rule);
       if (value == null) {
         if (rule.required) return null; // 必須なら null return
         continue; // 読み飛ばす
@@ -20,21 +20,57 @@ class FmParser{
     for (const [key, rule] of Object.entries(this.setting.meta)) {
       const value = fm[key];
       if (value === undefined) continue;
-      meta[key] = this.#normalize(value, rule.type, rule.items);
+      const normalized = this.#normalize(value, rule);
+      if (normalized !== null) {
+        meta[key] = normalized;
+      }
     }
     return meta;
   }
-  #normalize(value, type) {
+  #normalize(value, rule) {
+    if (!rule) return null;
+    const type = rule.type;
     switch (type) {
       case "string": return String(value);
-      case "datetime":
-      {
-        const v = this.#validateDatetime(value);
-        return v; // ← 正常なら string / 異常なら null
-      }
+      case "datetime": return this.#validateDatetime(value);
       case "array":
         if (!Array.isArray(value)) return null;
-        return value.map(v => String(v));
+        if (!rule.items) {
+          return value;
+        }
+        // string array
+        if (rule.items.type === "string") {
+          return value.map(v => String(v));
+        }
+        // object array
+        if (rule.items.type === "object") {
+          return value.map(obj => {
+            const out = {};
+            for (const [k, r] of Object.entries(rule.items.properties)) {
+              const v = obj[k];
+              const normalized = this.#normalize(v, r);
+              if (normalized == null) {
+                if (r.required) return null;
+                continue;
+              }
+              out[k] = normalized;
+            }
+            return out;
+          }).filter(v => v !== null);
+        }
+        return null;
+      case "object":
+        const obj = {};
+        for (const [k, r] of Object.entries(rule.properties || {})) {
+          const v = value[k];
+          const normalized = this.#normalize(v, r);
+          if (normalized == null) {
+            if (r.required) return null;
+            continue;
+          }
+          obj[k] = normalized;
+        }
+        return obj;
       default: return null;
     }
   }
