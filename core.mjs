@@ -2,18 +2,32 @@
 // possg core
 // (C)2026 by D.F.Mac.@TripArts Music
 
-const DBG = true;
+const DBG = false;
 
 import fs from "fs-extra";
 import path from "path";
+import { fileURLToPath, pathToFileURL } from "url";
 import unzipper from "unzipper";
 import matter from "gray-matter";
 import MarkdownIt from "markdown-it";
 import markdownItImageFigures from "markdown-it-image-figures";
+import hljs from "highlight.js";
 import ejs from "ejs";
 import sharp from "sharp";
 import Datastore from "@seald-io/nedb";
 import FmParser from "./libs/fmparser.mjs";
+
+const CORE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+function escapeScriptClose(str) {
+  return str
+    .replace(/<\/script/gi, "<\\/script")
+    // テンプレート由来の静的HTMLがApacheのmod_include(SSI)によって
+    // ディレクティブと誤認識されないよう、生バイト列としては
+    // "<!--#" が出現しないようにする(JS文字列としては#が"#"に
+    // 解決されるため、レンダリング結果は変化しない)
+    .replace(/<!--#/g, "<!--\\u0023");
+}
 
 class PossgCore{
   constructor(config){
@@ -26,6 +40,8 @@ class PossgCore{
     if(DBG) console.log("CONTENT_ROOT = "+this.CONTENT_ROOT);
     this.STAGING_ROOT = path.join(this.WWW_ROOT,config.STAGING_DIR); // STAGING_DIR = "staging"
     if(DBG) console.log("STAGING_ROOT = "+this.STAGING_ROOT);
+    this.TAGS_DIR = config.TAGS_DIR ?? "tags"; // TAGS_DIR = "tags"
+    if(DBG) console.log("TAGS_DIR = "+this.TAGS_DIR);
     this.TMP_PATH = path.join(this.ROOT,config.TMP_DIR); // TMP_DIR = ".tmp"
     if(DBG) console.log("TMP_PATH = "+this.TMP_PATH);
     this.DB_ROOT = path.join(this.ROOT,config.DB_DIR); // DB_DIR = "db"
@@ -59,6 +75,10 @@ class PossgCore{
     if(DBG) console.log("INDEX_PAGE_SIZE = "+this.INDEX_PAGE_SIZE);
     this.ICON_URL = config.ICON_URL;
     if(DBG) console.log("ICON_URL = "+this.ICON_URL);
+    this.CSS_URL = config.CSS_URL;
+    if(DBG) console.log("CSS_URL = "+this.CSS_URL);
+    this.JS_URL = config.JS_URL;
+    if(DBG) console.log("JS_URL = "+this.JS_URL);
     this.RETURN_URL = config.RETURN_URL;
     if(DBG) console.log("RETURN_URL = "+this.RETURN_URL);
     this.RETURN_TEXT = config.RETURN_TEXT;
@@ -72,22 +92,40 @@ class PossgCore{
     if(DBG) console.log("PossgCore.init()");
     await fs.ensureDir(this.DB_ROOT);
     this.db = new Datastore({ filename: this.DB_PATH, autoload: true });
-    this.md = new MarkdownIt({html: true})
+    this.md = new MarkdownIt({
+      html: true,
+      highlight: function (str, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          try {
+            return hljs.highlight(str, { language: lang }).value;
+          } catch (__) {}
+        }
+        return "";
+      }
+    })
       .use(markdownItImageFigures, {figcaption: true,copyAttrs: true});;
     const { default: customFunc } = await import(this.CUSTOMFUNC_PATH);
     this.customfunc = new customFunc();
   }
-  async import(zipPath){
-    if(DBG) console.log("PossgCore.import() zipPath = "+zipPath);
-    if (!zipPath) throw new Error("zip required");
+  async import(sourcePath){
+    if(DBG) console.log("PossgCore.import() sourcePath = "+sourcePath);
+    if (!sourcePath) throw new Error("zip or folder required");
 
-    const key = path.basename(zipPath, ".zip");
+    const stat = await fs.stat(sourcePath);
+    const isDirectory = stat.isDirectory();
+    const key = isDirectory
+      ? path.basename(path.resolve(sourcePath))
+      : path.basename(sourcePath, ".zip");
 
     await fs.remove(this.TMP_PATH);
     await fs.ensureDir(this.TMP_PATH);
-    await fs.createReadStream(zipPath)
-      .pipe(unzipper.Extract({ path: this.TMP_PATH }))
-      .promise();
+    if (isDirectory) {
+      await fs.copy(sourcePath, path.join(this.TMP_PATH, key));
+    } else {
+      await fs.createReadStream(sourcePath)
+        .pipe(unzipper.Extract({ path: this.TMP_PATH }))
+        .promise();
+    }
 
     const mdPath = path.join(this.TMP_PATH, key, "index.md");
     const raw = await fs.readFile(mdPath, "utf8");
@@ -159,6 +197,8 @@ class PossgCore{
     const html = await ejs.renderFile(this.TEMPLATE_PATH,
       {
         iconurl:this.ICON_URL,
+        cssurl:this.CSS_URL,
+        jsurl:this.JS_URL,
         returnurl:this.RETURN_URL,
         returntext:this.RETURN_TEXT,
         blogtitle:this.BLOGTITLE,
@@ -459,6 +499,7 @@ class PossgCore{
     );
 
     for (const article of articles) {
+      if (article.release) continue;
       await this.renderArticle({key: article._id,isStaging: true});
     }
 
@@ -473,12 +514,159 @@ class PossgCore{
     }
     await this.rebuildIndexes();
   }
+  async #loadCustomFuncForViewer() {
+    if (!(await fs.pathExists(this.CUSTOMFUNC_PATH))) return null;
+    try {
+      const { default: CustomFuncClass } = await import(pathToFileURL(this.CUSTOMFUNC_PATH).href);
+      return new CustomFuncClass();
+    } catch (err) {
+      console.error(`genViewer: customfunc.mjsの読み込みに失敗しました: ${err.message}`);
+      return null;
+    }
+  }
+  #callViewerHook(instance, methodName, fallback) {
+    if (instance && typeof instance[methodName] === "function") {
+      try {
+        return instance[methodName]();
+      } catch (err) {
+        console.error(`genViewer: customFunc.${methodName}()の呼び出しでエラー: ${err.message}`);
+      }
+    }
+    return fallback;
+  }
+  async genViewer() {
+    if(DBG) console.log("PossgCore.genViewer()");
+
+    const customFuncInstance = await this.#loadCustomFuncForViewer();
+    const viewerExternalScripts = this.#callViewerHook(customFuncInstance, "getViewerExternalScripts", []);
+    const viewerExternalStyles = this.#callViewerHook(customFuncInstance, "getViewerExternalStyles", []);
+
+    // SSI(<!--#include virtual="..."-->)はビルド時ではなく、ブラウザ側で
+    // customFunc.getViewerSSIIncludes()のURLをfetch()して都度解決する
+    // (viewer-runtime.js側で実施。ローカルファイルの追従管理が不要になる代わりに
+    // file:///では動作しない)
+    const templateSource = await fs.readFile(this.TEMPLATE_PATH, "utf8");
+    const compiledFnSrc = ejs.compile(templateSource, { client: true }).toString();
+
+    const cssPath = path.join(this.TEMPLATE_ROOT, "possg.css");
+    const jsAssetPath = path.join(this.TEMPLATE_ROOT, "possg.js");
+    const cssText = (await fs.pathExists(cssPath)) ? await fs.readFile(cssPath, "utf8") : "";
+    const jsAssetText = (await fs.pathExists(jsAssetPath)) ? await fs.readFile(jsAssetPath, "utf8") : "";
+
+    const fmParserSrc = (await fs.readFile(path.join(CORE_DIR, "libs", "fmparser.mjs"), "utf8"))
+      .replace(/export default \w+;\s*$/, "");
+    const customFuncSrc = (await fs.pathExists(this.CUSTOMFUNC_PATH))
+      ? (await fs.readFile(this.CUSTOMFUNC_PATH, "utf8")).replace(/export default \w+;\s*$/, "")
+      : "class customFunc {}";
+    const viewerRuntimeSrc = await fs.readFile(path.join(CORE_DIR, "libs", "viewer-runtime.js"), "utf8");
+
+    const nodeModulesRoot = path.join(CORE_DIR, "node_modules");
+    const markdownItSrc = await fs.readFile(path.join(nodeModulesRoot, "markdown-it", "dist", "markdown-it.js"), "utf8");
+    const imageFiguresSrc = await fs.readFile(path.join(nodeModulesRoot, "markdown-it-image-figures", "dist", "markdown-it-images-figures.umd.js"), "utf8");
+    const jsYamlSrc = await fs.readFile(path.join(nodeModulesRoot, "js-yaml", "dist", "js-yaml.min.js"), "utf8");
+
+    const viewerConfig = {
+      iconurl: this.ICON_URL,
+      returnurl: this.RETURN_URL,
+      returntext: this.RETURN_TEXT,
+      blogtitle: this.BLOGTITLE,
+      footertext: this.FOOTERTEXT,
+      contentUrlBase: this.CONTENT_URL_BASE,
+      frontmatter: this.fmParser.setting,
+      externalScripts: viewerExternalScripts,
+      externalStyles: viewerExternalStyles
+    };
+
+    const html = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>possg viewer</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+#app { display: flex; height: 100vh; }
+#dropArea {
+  width: 80px;
+  flex-shrink: 0;
+  background: #fafafa;
+  border-right: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+}
+#dropArea.dragover { background: #e0f0ff; }
+#reloadBtn { width: 100%; padding: 6px 2px; font-size: 11px; cursor: pointer; }
+#status { font-size: 10px; color: #666; word-break: break-all; }
+#previewPane { flex: 1; height: 100%; }
+#preview { width: 100%; height: 100%; border: none; display: block; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="dropArea">
+    <div>ここにzipをドラッグ&amp;ドロップ</div>
+    <button id="reloadBtn" type="button">リロード</button>
+    <div id="status"></div>
+  </div>
+  <div id="previewPane">
+    <iframe id="preview"></iframe>
+  </div>
+</div>
+<script>
+window.__VIEWER_CONFIG__ = ${escapeScriptClose(JSON.stringify(viewerConfig))};
+window.__VIEWER_CSS_TEXT__ = ${escapeScriptClose(JSON.stringify(cssText))};
+window.__VIEWER_JS_TEXT__ = ${escapeScriptClose(JSON.stringify(jsAssetText))};
+</script>
+<script>
+${escapeScriptClose(fmParserSrc)}
+</script>
+<script>
+${escapeScriptClose(customFuncSrc)}
+</script>
+<script>
+${escapeScriptClose(markdownItSrc)}
+</script>
+<script>
+${escapeScriptClose(imageFiguresSrc)}
+</script>
+<script>
+${escapeScriptClose(jsYamlSrc)}
+</script>
+<script>
+window.__VIEWER_TEMPLATE_FN__ = ${escapeScriptClose(compiledFnSrc)};
+</script>
+<script>
+${escapeScriptClose(viewerRuntimeSrc)}
+</script>
+</body>
+</html>
+`;
+
+    const outPath = path.join(this.ROOT, "viewer.html");
+    await fs.writeFile(outPath, html);
+    return outPath;
+  }
   async rebuildIndexes() {
     if(DBG) console.log("PossgCore.rebuildIndexes()");
     await this.#cleanIndexPages(this.STAGING_ROOT);
     await this.#cleanIndexPages(this.CONTENT_ROOT);
+    await fs.remove(path.join(this.STAGING_ROOT, this.TAGS_DIR));
+    await fs.remove(path.join(this.CONTENT_ROOT, this.TAGS_DIR));
     await this.buildIndex({ isStaging: true });
     await this.buildIndex({ isStaging: false });
+    if (this.#tagsEnabled()) {
+      await this.buildTagIndexes({ isStaging: true });
+      await this.buildTagIndexes({ isStaging: false });
+    }
+  }
+  #tagsEnabled() {
+    return Boolean(this.fmParser?.setting?.meta?.tags);
   }
   async #cleanIndexPages(outDir) {
     try {
@@ -493,21 +681,40 @@ class PossgCore{
       // outDir が存在しない場合は無視
     }
   }
-  async buildIndex({ isStaging }) {
-    if(DBG) console.log("PossgCore.buildIndex() isStaging = "+isStaging);
-    const query = isStaging ? {} : { release: true };
+  #collectTags(articles, isStaging) {
+    if (!this.#tagsEnabled()) return [];
+    const baseUrl = isStaging ? this.STAGING_URL_BASE : this.CONTENT_URL_BASE;
+    const counts = {};
+    for (const a of articles) {
+      for (const rawTag of (a.meta?.tags ?? [])) {
+        const tag = String(rawTag).trim();
+        if (!tag || tag.includes("/") || tag.includes("\\")) {
+          console.error(`skip unsafe tag: ${JSON.stringify(rawTag)}`);
+          continue;
+        }
+        counts[tag] = (counts[tag] ?? 0) + 1;
+      }
+    }
+    const tagList = Object.keys(counts)
+      .sort((a, b) => a.localeCompare(b, "ja"))
+      .map(tag => ({
+        name: tag,
+        count: counts[tag],
+        link: `${baseUrl}/${this.TAGS_DIR}/${tag}/`,
+        isAll: false
+      }));
 
-    const articles = await new Promise(resolve => {
-      this.db.find(query, (_, docs) => resolve(docs));
-    });
-
+    return [
+      { name: "全体", count: articles.length, link: `${baseUrl}/`, isAll: true },
+      ...tagList
+    ];
+  }
+  async #renderIndexPageSet({ articles, isStaging, outDir, blogtitle, blogdesc, tags, currentTag }) {
     const sorted = articles
       .filter(a => a.datetime)
       .sort((a, b) => b.datetime.localeCompare(a.datetime));
 
     const totalPages = Math.max(1,Math.ceil(sorted.length / this.INDEX_PAGE_SIZE));
-    const baseUrl = (isStaging)? this.STAGING_URL_BASE : this.CONTENT_URL_BASE;
-    const outDir = (isStaging)? this.STAGING_ROOT : this.CONTENT_ROOT;
 
     await fs.ensureDir(outDir);
 
@@ -538,12 +745,15 @@ class PossgCore{
         {
           items,
           iconurl:this.ICON_URL,
+          cssurl:this.CSS_URL,
           returnurl:this.RETURN_URL,
           returntext:this.RETURN_TEXT,
-          blogtitle: this.BLOGTITLE,
-          blogdesc: this.BLOGDESC,
+          blogtitle,
+          blogdesc,
           footertext: this.FOOTERTEXT,
           gaid: this.GA_ID,
+          tags,
+          currentTag,
           currentPage: page,
           totalPages,
           prevPage: page > 1 ? page - 1 : null,
@@ -557,6 +767,61 @@ class PossgCore{
         path.join(outDir, filename),
         html
       );
+    }
+  }
+  async buildIndex({ isStaging }) {
+    if(DBG) console.log("PossgCore.buildIndex() isStaging = "+isStaging);
+    const query = isStaging ? {} : { release: true };
+
+    const articles = await new Promise(resolve => {
+      this.db.find(query, (_, docs) => resolve(docs));
+    });
+
+    const outDir = (isStaging)? this.STAGING_ROOT : this.CONTENT_ROOT;
+    const tags = this.#collectTags(articles, isStaging);
+
+    await this.#renderIndexPageSet({
+      articles,
+      isStaging,
+      outDir,
+      blogtitle: this.BLOGTITLE,
+      blogdesc: this.BLOGDESC,
+      tags,
+      currentTag: null
+    });
+  }
+  async buildTagIndexes({ isStaging }) {
+    if(DBG) console.log("PossgCore.buildTagIndexes() isStaging = "+isStaging);
+    const query = isStaging ? {} : { release: true };
+
+    const articles = await new Promise(resolve => {
+      this.db.find(query, (_, docs) => resolve(docs));
+    });
+
+    const root = (isStaging)? this.STAGING_ROOT : this.CONTENT_ROOT;
+    const tags = this.#collectTags(articles, isStaging);
+
+    const byTag = {};
+    for (const a of articles) {
+      for (const rawTag of (a.meta?.tags ?? [])) {
+        const tag = String(rawTag).trim();
+        if (!tag || tag.includes("/") || tag.includes("\\")) continue;
+        byTag[tag] ??= [];
+        byTag[tag].push(a);
+      }
+    }
+
+    for (const [tag, tagArticles] of Object.entries(byTag)) {
+      const outDir = path.join(root, this.TAGS_DIR, tag);
+      await this.#renderIndexPageSet({
+        articles: tagArticles,
+        isStaging,
+        outDir,
+        blogtitle: this.BLOGTITLE,
+        blogdesc: this.BLOGDESC,
+        tags,
+        currentTag: tag
+      });
     }
   }
 }
