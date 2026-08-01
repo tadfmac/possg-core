@@ -1,6 +1,6 @@
 {
   "name": "possg-core",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "possg core",
   "type": "module",
   "main": "core.mjs",
@@ -28,6 +28,7 @@
     "js-yaml": "^3.14.2",
     "markdown-it": "^14.1.0",
     "markdown-it-image-figures": "^2.1.1",
+    "possg": "^0.1.2",
     "sharp": "^0.35.3",
     "unzipper": "^0.12.3"
   }

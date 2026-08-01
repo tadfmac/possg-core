@@ -271,12 +271,12 @@ class PossgCore{
     // 3. なし
     return null;
   }
-  #getIndexImageUrl(article, isStaging) {
+  #getIndexImageUrl(article) {
     if (!article.thumbnail) return null;
 
-    const baseUrl = isStaging
-      ? this.STAGING_URL_BASE
-      : this.CONTENT_URL_BASE;
+    const baseUrl = article.release
+      ? this.CONTENT_URL_BASE
+      : this.STAGING_URL_BASE;
 
     const year = article.datetime.slice(0, 4);
 
@@ -730,7 +730,7 @@ ${escapeScriptClose(viewerRuntimeSrc)}
           ? this.CONTENT_URL_BASE
           : this.STAGING_URL_BASE;
 
-        const thumb = await this.#getIndexImageUrl(a, isStaging);
+        const thumb = await this.#getIndexImageUrl(a);
 
         items.push( {
           datetime: this.#formatDateTime(a.datetime),
