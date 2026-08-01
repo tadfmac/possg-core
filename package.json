@@ -4,6 +4,14 @@
   "description": "possg core",
   "type": "module",
   "main": "core.mjs",
+  "files": [
+    "core.mjs",
+    "libs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tadfmac/possg-core.git"
+  },
   "author": "D.F.Mac.@TripArts Music",
   "license": "MIT",
   "dependencies": {
@@ -13,7 +21,7 @@
     "fs-extra": "^11.3.3",
     "gray-matter": "^4.0.3",
     "highlight.js": "^11.11.1",
-    "install": "^0.13.0",
+    "js-yaml": "^3.14.2",
     "markdown-it": "^14.1.0",
     "markdown-it-image-figures": "^2.1.1",
     "sharp": "^0.34.5",
