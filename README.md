@@ -1,90 +1,92 @@
 # possg-core
 
-シンプルなBLOG向けSSGのCOREです。
+[日本語](./README-JP.md)
 
-## 特徴
+A simple SSG core for blogs.
 
-- zipファイルまたはフォルダによる記事の入稿
-- front matter付きmarkdownからHTMLを出力(EJSテンプレート)
-- 軽量JSON DB([@seald-io/nedb](https://github.com/seald/nedb))を利用。特別なDBサーバ不要
-- staging(下書き)/content(公開)の2状態管理
-- frontmatterの`tags`によるタグ別indexページの自動生成
-- コードブロックのシンタックスハイライト(ビルド時、[highlight.js](https://highlightjs.org/))
-- `possg genviewer`用: zip記事をブラウザ単体でドラッグ&ドロッププレビューできるHTMLの生成
+## Features
+
+- Article ingestion via a zip file or a folder
+- Outputs HTML from markdown with front matter (EJS templates)
+- Uses a lightweight JSON DB ([@seald-io/nedb](https://github.com/seald/nedb)) — no dedicated DB server needed
+- Two-state management: staging (draft) / content (published)
+- Automatic tag-based index pages, driven by frontmatter `tags`
+- Syntax highlighting for code blocks (at build time, via [highlight.js](https://highlightjs.org/))
+- For `possg genviewer`: generates HTML that lets you preview a zip article via drag-and-drop, in the browser alone
 
 ## API
 
-`import PossgCore from "possg-core";` で読み込み、`new PossgCore(config)` でインスタンス化して使います(configの詳細は[possgのconfig.example.mjs](https://github.com/tadfmac/possg/blob/main/config.example.mjs)を参照してください)。
+Load it with `import PossgCore from "possg-core";` and instantiate it with `new PossgCore(config)` (see [possg's config.example.mjs](https://github.com/tadfmac/possg/blob/main/config.example.mjs) for details on config).
 
 ### `async init()`
 
-DB接続、MarkdownItインスタンスの構築、`customfunc.mjs`の読み込みを行います。`genViewer()`以外のメソッドを呼ぶ前に必ず一度呼んでください。
+Connects to the DB, builds the MarkdownIt instance, and loads `customfunc.mjs`. Always call this once before calling any method other than `genViewer()`.
 
 ### `async import(sourcePath)`
 
-記事を1件登録します。`sourcePath`には**zipファイル、またはフォルダ**を指定できます。
+Registers a single article. `sourcePath` can be **a zip file or a folder**.
 
-- zipファイルの場合: ファイル名(`.zip`を除く)がレコードのkeyになります
-- フォルダの場合: フォルダ名自体がレコードのkeyになります
-- どちらも、直下に`index.md`(front matter付きmarkdown)と画像等のアセットが並んだ構造であることが前提です
-- 既に登録済みのkeyと同じものをimportすると、既存レコードが上書き更新されます
-- importした記事は必ず**staging(下書き)状態**になります
-- markdown本文またはfrontmatterの`images`から最初の画像を検出し、`THUMBNAIL`設定のサイズでサムネイルを自動生成します
+- For a zip file: the filename (minus `.zip`) becomes the record's key
+- For a folder: the folder name itself becomes the record's key
+- Either way, it's expected to contain `index.md` (markdown with front matter) plus assets like images directly underneath it
+- Importing with a key that's already registered overwrites the existing record
+- An imported article is always placed into **staging (draft) state**
+- Detects the first image referenced from the markdown body or the frontmatter's `images`, and automatically generates a thumbnail at the size configured in `THUMBNAIL`
 
 ### `async publish(key, isRelease)`
 
-記事の公開状態を切り替えます。`isRelease`が`true`ならstaging→content(公開)へ、`false`ならcontent→stagingへ、記事のHTML・アセット一式を移動します。記事の実体は常にどちらか一方のフォルダにのみ存在します(移動方式であり複製ではありません)。
+Toggles an article's publication state. If `isRelease` is `true`, moves the article's HTML and assets from staging to content (published); if `false`, moves them back from content to staging. The article's actual files always live in exactly one of the two folders (it's a move, not a copy).
 
 ### `async remove(key)`
 
-指定したkeyの記事を削除します(staging/contentどちらにあっても削除されます)。
+Deletes the article with the given key (deleted whether it's currently in staging or content).
 
 ### `async removeAll()`
 
-登録されている記事を全件削除します。
+Deletes every registered article.
 
 ### `async buildAll()`
 
-DBに登録済みの情報を元に、記事HTML・nav・index・タグindexを一括で再生成します。テンプレートを修正した後の反映などに使います。
+Regenerates article HTML, nav, index, and tag indexes all at once, based on what's in the DB. Useful for propagating changes after editing a template.
 
 ### `async genViewer()`
 
-`possg genviewer`コマンド用です。アプリの`config.mjs`・`template/`・`customfunc.mjs`を読み込み、zip形式の記事をブラウザだけでドラッグ&ドロッププレビューできる自己完結HTML(`viewer.html`)を、アプリのルートディレクトリ直下に生成します。`init()`は不要です(DB接続やMarkdownIt初期化を行わないぶん軽量です)。詳細は「genviewer(記事プレビュー)」を参照してください。
+Used by the `possg genviewer` command. Reads the app's `config.mjs`, `template/`, and `customfunc.mjs`, and generates a self-contained HTML file (`viewer.html`), directly under the app's root directory, that lets you preview a zip-format article via drag-and-drop using nothing but the browser. `init()` is not required (it's lighter weight, since it skips DB connection and MarkdownIt initialization). See "genviewer (Article Preview)" below for details.
 
-## タグ機能
+## Tag Feature
 
-frontmatterの`meta.tags`(config.mjsの`frontmatter.meta.tags`で定義)にタグを指定すると、タグごとに絞り込まれたindexページが自動生成されます。
+Specify tags in `meta.tags` of an article's frontmatter (defined via `frontmatter.meta.tags` in config.mjs), and index pages filtered by tag are generated automatically.
 
-- 生成先: `contents/tags/<タグ名>/`、`staging/tags/<タグ名>/`(`config.mjs`の`TAGS_DIR`で変更可、デフォルト`"tags"`)
-- staging側のタグindex・タグ一覧は下書き含む全記事を横断的に集計・表示します。content側は公開済み記事のみです
-- 各indexページの説明文直後にタグ一覧(件数付き、選択中タグは強調表示)が表示されます。先頭には常に「全体」(全記事一覧に戻るリンク)が入ります
-- 記事から使われなくなったタグのページは、次回の再生成時に自動的に削除されます
-- `frontmatter.meta.tags`のスキーマ自体を定義していないアプリでは、タグ機能全体が無効化されます(タグ一覧・タグページとも一切生成されません)
+- Output location: `contents/tags/<tag name>/`, `staging/tags/<tag name>/` (configurable via `TAGS_DIR` in config.mjs; default `"tags"`)
+- On the staging side, the tag index and tag list aggregate and display every article across the board, drafts included. On the content side, only published articles are counted
+- Right after the description text on each index page, a tag list is shown (with counts, and the currently selected tag highlighted). An "All" entry is always shown first, linking back to the unfiltered article list
+- Tag pages no longer referenced by any article are automatically deleted the next time content is regenerated
+- On apps that don't define the `frontmatter.meta.tags` schema at all, the entire tag feature is disabled (neither the tag list nor any tag pages are generated)
 
-## staging/release(下書き/公開)モデル
+## Staging/Release Model
 
-- 記事のHTML本体は、常にstaging・contentのどちらか一方にのみ物理的に存在します(`import`→staging生成、`publish`→content移動、`unpublish`→staging復帰。移動時は元フォルダの実体を削除します)
-- 一方、**サイドバー(他の記事へのnav)・記事一覧(index)の表示内容は、stagingでは下書き＋公開済みを横断的に一覧できます**。公開済み記事がstaging側の一覧に現れても、そのリンク先は自動的にcontent側の実URLを指すため、記事ファイル自体が複製されることはありません
+- An article's HTML always physically exists in exactly one of staging or content (`import` → generated into staging, `publish` → moved to content, `unpublish` → moved back to staging; the source folder's files are deleted on each move)
+- On the other hand, **the sidebar (nav to other articles) and the article list (index) show drafts and published articles together, across the board, while in staging**. Even when a published article shows up in the staging-side list, its link automatically points to its real URL on the content side, so the article's files are never duplicated
 
-## シンタックスハイライト
+## Syntax Highlighting
 
-コードフェンス(` ```言語名 `)で言語が明示されている場合のみ、ビルド時(サーバーサイド)にhighlight.jsで色付けされます。未指定・未対応言語の場合はプレーンな(無色の)コードとして出力されます。テーマはCSS側(`.hljs-*`クラス)で管理します。
+Only when a language is specified on a code fence (` ```language `) is it colorized at build time (server-side) with highlight.js. Unspecified or unsupported languages are output as plain (uncolored) code. The theme itself is managed on the CSS side (via `.hljs-*` classes).
 
-## genviewer(記事プレビュー)
+## genviewer (Article Preview)
 
-`possg genviewer`コマンドで生成される`viewer.html`は、`possg import`と同じzip形式の記事ファイルをドラッグ&ドロップするだけで、実際のテンプレート・CSSでレンダリングした結果をその場でプレビューできる単一の自己完結HTMLファイルです。Node.jsは不要で、ブラウザだけで動作します。
+`viewer.html`, generated by the `possg genviewer` command, is a single self-contained HTML file: drag and drop the same zip-format article file used by `possg import` onto it, and it previews on the spot how the article would render with the real template and CSS. Node.js isn't required — it works in the browser alone.
 
-ただし、テンプレートがApacheのSSI(`<!--#include virtual="...">`)を使っている場合、`file:///`として直接開くとSSI部分だけ解決されません(詳細は後述)。SSIを使うテンプレートで完全に動作確認したい場合は、`viewer.html`をWebサーバでホスティングしてアクセスしてください。SSIを使わないテンプレートであれば`file:///`のままで問題ありません。
+That said, if the template uses Apache SSI (`<!--#include virtual="...">`), opening it directly as `file:///` leaves just the SSI part unresolved (details below). If you want to fully verify a template that uses SSI, host `viewer.html` on a web server and access it that way. For templates that don't use SSI, `file:///` is fine as-is.
 
-**customFunc.mjsによる拡張(アプリ固有の設定)**
+**Extending via customFunc.mjs (app-specific settings)**
 
-テンプレートが外部のCDNライブラリ(jQuery/カルーセルライブラリ等)に依存している場合、`customfunc.mjs`に以下のメソッドを実装すると`genViewer()`実行時に自動的に呼び出されます。
+If your template depends on an external CDN library (jQuery, a carousel library, etc.), implementing the following methods in `customfunc.mjs` causes them to be called automatically when `genViewer()` runs.
 
 ```js
 class customFunc {
   // ...
 
-  // genViewer()実行時(Node側)に呼ばれる。CDN URLの配列を返す
+  // Called (on the Node side) when genViewer() runs. Return an array of CDN URLs
   getViewerExternalScripts() {
     return ["https://cdn.jsdelivr.net/npm/some-lib/dist/lib.min.js"];
   }
@@ -94,29 +96,29 @@ class customFunc {
 }
 ```
 
-テンプレートがApacheのSSI(`<!--#include virtual="/path/to/x.html">`)を使っている場合は、customFunc側の対応は不要です。`viewer.html`はテンプレート中の全SSIディレクティブを自動検出し、その仮想パスをそのまま`fetch()`して内容を解決します(Apache SSIの`virtual=`とブラウザの絶対パスfetchは解決方式が同じため)。**同一オリジンでホスティングした場合のみ機能し、`file:///`では解決されません**(fetch失敗時はエラーをコンソールに出力するのみで、記事本体のレンダリングは継続します)。
+If your template uses Apache SSI (`<!--#include virtual="/path/to/x.html">`), no handling on the customFunc side is needed. `viewer.html` automatically detects every SSI directive in the template and resolves its content by `fetch()`-ing the virtual path as-is (Apache SSI's `virtual=` and a browser's absolute-path fetch resolve the same way). **This only works when hosted on the same origin, and is not resolved under `file:///`** (if the fetch fails, it's only logged to the console as an error, and rendering of the article itself continues regardless).
 
-customFunc.mjsのクラス定義自体は`viewer.html`にも埋め込まれ、テンプレートレンダリング用の`func`としてブラウザ上でも使われます。そのため、これらのメソッドは**fs/path等のNode専用APIに依存させず、プレーンな値(配列)を返すだけ**にしてください。
+The `customFunc.mjs` class definition itself is also embedded into `viewer.html`, and used in the browser as the `func` for template rendering. Because of that, these methods should **avoid depending on Node-only APIs such as fs/path, and should just return plain values (arrays)**.
 
-## 主なconfig.mjsキー
+## Main config.mjs Keys
 
-| キー | 説明 |
+| Key | Description |
 |---|---|
-| `WWW_DIR` / `CONTENT_DIR` / `STAGING_DIR` | 出力先ディレクトリ構成 |
-| `TAGS_DIR` | タグ別indexの出力先フォルダ名(省略時`"tags"`) |
-| `TEMPLATE_DIR` / `TEMPLATE_FILE_NAME` / `IDX_TEMPLATE_FILE_NAME` | テンプレートの場所とファイル名 |
-| `CUSTOMFUNC_DIR` / `CUSTOMFUNC_FILE_NAME` | customfunc.mjsの場所 |
-| `CONTENT_URL_BASE` / `STAGING_URL_BASE` | 公開/下書きページのURLベース |
-| `ICON_URL` / `CSS_URL` / `JS_URL` | favicon・possg.css・possg.jsのURL(いずれも省略可。無い場合はテンプレート側で該当タグ自体が出力されません) |
-| `frontmatter` | frontmatterのスキーマ定義(`core`は必須項目、`meta`は任意項目。`meta.tags`を定義するとタグ機能が有効になります) |
-| `INDEX_PAGE_SIZE` | 記事一覧の1ページあたりの件数 |
-| `THUMBNAIL` | サムネイル生成サイズ(`width`/`height`) |
-| `RELEASE_FEATURE` | `false`にすると`publish()`が無効化されます |
+| `WWW_DIR` / `CONTENT_DIR` / `STAGING_DIR` | Output directory layout |
+| `TAGS_DIR` | Output folder name for tag-based indexes (defaults to `"tags"` if omitted) |
+| `TEMPLATE_DIR` / `TEMPLATE_FILE_NAME` / `IDX_TEMPLATE_FILE_NAME` | Location and filenames of the templates |
+| `CUSTOMFUNC_DIR` / `CUSTOMFUNC_FILE_NAME` | Location of customfunc.mjs |
+| `CONTENT_URL_BASE` / `STAGING_URL_BASE` | URL base for published/draft pages |
+| `ICON_URL` / `CSS_URL` / `JS_URL` | URLs for the favicon, possg.css, and possg.js (all optional — if omitted, the corresponding tag simply isn't output on the template side) |
+| `frontmatter` | The frontmatter schema definition (`core` holds required fields, `meta` holds optional ones; defining `meta.tags` turns on the tag feature) |
+| `INDEX_PAGE_SIZE` | Number of articles per page in the article list |
+| `THUMBNAIL` | Thumbnail generation size (`width`/`height`) |
+| `RELEASE_FEATURE` | Setting this to `false` disables `publish()` |
 
-## 依存ライブラリ
+## Dependencies
 
 `fs-extra` / `unzipper` / `gray-matter` / `markdown-it` / `markdown-it-image-figures` / `highlight.js` / `ejs` / `sharp` / `@seald-io/nedb`
 
-## ライセンス
+## License
 
 MIT

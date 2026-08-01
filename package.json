@@ -6,8 +6,12 @@
   "main": "core.mjs",
   "files": [
     "core.mjs",
-    "libs"
+    "libs",
+    "README-JP.md"
   ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tadfmac/possg-core.git"
