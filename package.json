@@ -1,6 +1,6 @@
 {
   "name": "possg-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "possg core",
   "type": "module",
   "main": "core.mjs",
