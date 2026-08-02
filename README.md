@@ -112,20 +112,22 @@ possg genviewer -static
 
 This generates a separate `viewer-static.html` instead of `viewer.html`. Instead of resolving SSI directives at view time in the browser, `genViewer()` resolves them once, at generation time in Node, and bakes the resolved content directly into the template — so the browser-side engine has nothing left to `fetch()` at all.
 
-To use this, add a `getViewerSSIBaseUrl()` method to `customfunc.mjs`, returning the origin your SSI `virtual=` paths should be resolved against:
+To use this, add a `getViewerSiteBaseUrl()` method to `customfunc.mjs`, returning your real site's origin:
 
 ```js
 class customFunc {
   // ...
 
-  // genViewer({static:true})実行時(Node側)に呼ばれる。SSIのvirtual=を解決する基準URLを返す
-  getViewerSSIBaseUrl() {
+  // Called (on the Node side) whenever genViewer() runs, static or not. Return your real site's origin
+  getViewerSiteBaseUrl() {
     return "https://your-real-site.example.com";
   }
 }
 ```
 
-If this method isn't defined, or a given SSI include fails to fetch, `genviewer -static` doesn't abort — it logs an error to the console and leaves that particular directive's literal text embedded in `viewer-static.html`, the same graceful-degradation behavior as the regular runtime path.
+`getViewerSiteBaseUrl()` is used for two things: resolving SSI `virtual=` paths (build time, `-static` only), and — for both `viewer.html` and `viewer-static.html` alike — rewriting any root-relative `src`/`href` in the rendered article (e.g. `href="/css/site.css"`, `src="/images/logo.png"`, or whatever a template's own `func.getIconUrl()`/`func.getFaceUrl()`-style customFunc calls happen to return) into fully-qualified URLs anchored at that origin. This rewrite runs in the browser, after rendering, so it catches root-relative URLs regardless of where they came from — SSI-included content, or a customFunc method invoked directly from the template. It matters because under `file:///`, a root-relative path doesn't resolve against your real site at all — it resolves against the local filesystem root, so without this rewrite those assets simply fail to load (protocol-relative URLs starting with `//` are left alone).
+
+If `getViewerSiteBaseUrl()` isn't defined, or a given SSI include fails to fetch, `genviewer -static` doesn't abort — it logs an error to the console and leaves that particular directive's literal text embedded in `viewer-static.html`, the same graceful-degradation behavior as the regular runtime path.
 
 The trade-off (as the name implies): `viewer-static.html` is a snapshot. If the real content behind an SSI include changes later, it won't be reflected until you run `possg genviewer -static` again. Use the regular `viewer.html` when you want SSI content to always be current (and can host it), and `viewer-static.html` when you need it to work fully offline/under `file:///`.
 

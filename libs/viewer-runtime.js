@@ -158,6 +158,22 @@
     return result;
   }
 
+  // root-relative(例: href="/css/site.css")なsrc/href属性値を、customFuncの
+  // getViewerSiteBaseUrl()が設定されていればそのoriginを付与した絶対URLに書き換える。
+  // SSIで取り込んだ内容だけでなく、テンプレートがfunc.getIconUrl()等のcustomFunc呼び出しで
+  // 返すroot-relativeなURLも、レンダリング結果に対して行うことでまとめて対応できる。
+  // file:///で開いた場合、root-relativeなパスは実サイトと無関係なローカルファイルシステムの
+  // ルートに対して解決されてしまうため、常に実サイトのoriginを明示する必要がある。
+  // "//"始まり(protocol-relative)は対象外。ドロップした記事自身のアセット(ファイル名のみ、
+  // "/"始まりではない)を置換する後段の処理とは対象が重ならないため競合しない。
+  function rewriteRootRelativeUrls(html, baseUrl) {
+    if (!baseUrl) return html;
+    const origin = new URL(baseUrl).origin;
+    return html.replace(/((?:src|href))=(["'])\/(?!\/)([^"']*)\2/g, (full, attr, quote, rest) => {
+      return `${attr}=${quote}${origin}/${rest}${quote}`;
+    });
+  }
+
   /* ---------- highlight.js (CDN, optional) ---------- */
 
   function loadHljs() {
@@ -253,6 +269,7 @@
 
     let renderedHtml = window.__VIEWER_TEMPLATE_FN__(locals);
     renderedHtml = await resolveSSIIncludesViaFetch(renderedHtml);
+    renderedHtml = rewriteRootRelativeUrls(renderedHtml, cfg.siteBaseUrl);
     // テンプレートが直接生成する画像タグ(例: カルーセルの<img src="1.jpg?v=...">)も
     // 含めて、クエリ文字列付きの参照もファイル名基準でBlob URLに置換する
     return renderedHtml.replace(/((?:src|href))="([^"/#][^"]*)"/g, (full, attr, value) => {

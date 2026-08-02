@@ -112,20 +112,22 @@ possg genviewer -static
 
 これは`viewer.html`の代わりに、別ファイル`viewer-static.html`を生成します。SSIディレクティブをブラウザ側で都度解決する代わりに、`genViewer()`が生成時(Node側)に一度だけ解決し、その内容をテンプレートに直接埋め込みます。そのため、ブラウザ側のエンジンは`fetch()`する対象が最初から存在しない状態になります。
 
-利用するには、`customfunc.mjs`に`getViewerSSIBaseUrl()`メソッドを追加し、SSIの`virtual=`パスを解決する基準となるoriginを返すようにします。
+利用するには、`customfunc.mjs`に`getViewerSiteBaseUrl()`メソッドを追加し、実サイトの基準URLを返すようにします。
 
 ```js
 class customFunc {
   // ...
 
-  // genViewer({static:true})実行時(Node側)に呼ばれる。SSIのvirtual=を解決する基準URLを返す
-  getViewerSSIBaseUrl() {
+  // genViewer()実行時(Node側)に、static指定の有無によらず毎回呼ばれる。実サイトの基準URLを返す
+  getViewerSiteBaseUrl() {
     return "https://your-real-site.example.com";
   }
 }
 ```
 
-このメソッドが未定義の場合や、個別のSSIインクルードのfetchに失敗した場合でも、`genviewer -static`自体は中断しません。エラーをコンソールに出力した上で、該当ディレクティブの文字列をそのまま`viewer-static.html`に埋め込みます(ランタイム版と同じgraceful degradation)。
+`getViewerSiteBaseUrl()`は2つの用途に使われます。SSIの`virtual=`パスの解決(ビルド時、`-static`限定)と、`viewer.html`/`viewer-static.html`どちらでも、レンダリング結果中のroot-relativeな`src`/`href`(例: `href="/css/site.css"`、`src="/images/logo.png"`、あるいはテンプレートが直接呼ぶ`func.getIconUrl()`/`func.getFaceUrl()`のようなcustomFuncメソッドが返す値)を、このoriginを付与した絶対URLに書き換える処理です。この書き換えはブラウザ側でレンダリング後に行われるため、SSIで取り込んだ内容由来か、customFuncメソッド呼び出し由来かを問わず、root-relativeなURLであれば拾えます。これが必要な理由は、`file:///`環境ではroot-relativeなパスは実サイトとは無関係なローカルファイルシステムのルートに対して解決されてしまうため、そのままではCSSや画像が読み込めなくなるからです(`//`始まりのprotocol-relativeなURLは書き換え対象外です)。
+
+`getViewerSiteBaseUrl()`が未定義の場合や、個別のSSIインクルードのfetchに失敗した場合でも、`genviewer -static`自体は中断しません。エラーをコンソールに出力した上で、該当ディレクティブの文字列をそのまま`viewer-static.html`に埋め込みます(ランタイム版と同じgraceful degradation)。
 
 トレードオフとして(名前の通り)、`viewer-static.html`はスナップショットです。SSIで参照している実際のコンテンツが後で更新されても、再度`possg genviewer -static`を実行するまで反映されません。SSIの内容を常に最新に保ちたい場合(かつホスティングできる場合)は通常の`viewer.html`を、`file:///`・オフラインで完全に動作させたい場合は`viewer-static.html`を使い分けてください。
 

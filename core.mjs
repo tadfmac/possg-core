@@ -590,6 +590,11 @@ class PossgCore{
     const customFuncInstance = await this.#loadCustomFuncForViewer();
     const viewerExternalScripts = this.#callViewerHook(customFuncInstance, "getViewerExternalScripts", []);
     const viewerExternalStyles = this.#callViewerHook(customFuncInstance, "getViewerExternalStyles", []);
+    // root-relativeなURL(SSIの内容だけでなく、テンプレートがfunc.getIconUrl()等
+    // customFunc呼び出しで返すURLも含む)を絶対URL化するための基準。後者は記事を
+    // ドロップした閲覧時(ブラウザ側)に初めて評価されるため、この値はビルド時に
+    // 使うSSI解決以外に、viewerConfig経由でブラウザ側にも渡す(static/非staticともに)。
+    const siteBaseUrl = this.#callViewerHook(customFuncInstance, "getViewerSiteBaseUrl", null);
 
     let templateSource = await fs.readFile(this.TEMPLATE_PATH, "utf8");
 
@@ -598,11 +603,10 @@ class PossgCore{
       // (viewer-runtime.jsのresolveSSIIncludesViaFetch()、file:///では動作しない)。
       // -staticはその逆で、ビルド時に解決して埋め込む代わりに、以後SSI参照先が
       // 更新されても追従しない(再度 genviewer -static が必要)というトレードオフを持つ。
-      const ssiBaseUrl = this.#callViewerHook(customFuncInstance, "getViewerSSIBaseUrl", null);
-      if (ssiBaseUrl) {
-        templateSource = await this.#resolveSSIIncludesAtBuildTime(templateSource, ssiBaseUrl);
+      if (siteBaseUrl) {
+        templateSource = await this.#resolveSSIIncludesAtBuildTime(templateSource, siteBaseUrl);
       } else if (/<!--#include\s+virtual=/.test(templateSource)) {
-        console.error("genviewer -static: テンプレートにSSIディレクティブがありますが、customFunc.getViewerSSIBaseUrl()が未設定のため解決できません(ディレクティブ文字列がそのまま埋め込まれます)");
+        console.error("genviewer -static: テンプレートにSSIディレクティブがありますが、customFunc.getViewerSiteBaseUrl()が未設定のため解決できません(ディレクティブ文字列がそのまま埋め込まれます)");
       }
     }
 
@@ -633,7 +637,8 @@ class PossgCore{
       contentUrlBase: this.CONTENT_URL_BASE,
       frontmatter: this.fmParser.setting,
       externalScripts: viewerExternalScripts,
-      externalStyles: viewerExternalStyles
+      externalStyles: viewerExternalStyles,
+      siteBaseUrl: siteBaseUrl
     };
 
     const html = `<!DOCTYPE html>
