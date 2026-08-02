@@ -12,7 +12,7 @@
 - staging(下書き)/content(公開)の2状態管理
 - frontmatterの`tags`によるタグ別indexページの自動生成
 - コードブロックのシンタックスハイライト(ビルド時、[highlight.js](https://highlightjs.org/))
-- `possg genviewer`用: zip記事をブラウザ単体でドラッグ&ドロッププレビューできるHTMLの生成
+- `possg genviewer`用: zipファイルまたはフォルダの記事をブラウザ単体でドラッグ&ドロッププレビューできるHTMLの生成
 
 ## API
 
@@ -51,7 +51,7 @@ DBに登録済みの情報を元に、記事HTML・nav・index・タグindexを�
 
 ### `async genViewer()`
 
-`possg genviewer`コマンド用です。アプリの`config.mjs`・`template/`・`customfunc.mjs`を読み込み、zip形式の記事をブラウザだけでドラッグ&ドロッププレビューできる自己完結HTML(`viewer.html`)を、アプリのルートディレクトリ直下に生成します。`init()`は不要です(DB接続やMarkdownIt初期化を行わないぶん軽量です)。詳細は「genviewer(記事プレビュー)」を参照してください。
+`possg genviewer`コマンド用です。アプリの`config.mjs`・`template/`・`customfunc.mjs`を読み込み、zipファイルまたはフォルダの記事をブラウザだけでドラッグ&ドロッププレビューできる自己完結HTML(`viewer.html`)を、アプリのルートディレクトリ直下に生成します。`init()`は不要です(DB接続やMarkdownIt初期化を行わないぶん軽量です)。詳細は「genviewer(記事プレビュー)」を参照してください。
 
 ## タグ機能
 
@@ -74,7 +74,9 @@ frontmatterの`meta.tags`(config.mjsの`frontmatter.meta.tags`で定義)にタ�
 
 ## genviewer(記事プレビュー)
 
-`possg genviewer`コマンドで生成される`viewer.html`は、`possg import`と同じzip形式の記事ファイルをドラッグ&ドロップするだけで、実際のテンプレート・CSSでレンダリングした結果をその場でプレビューできる単一の自己完結HTMLファイルです。Node.jsは不要で、ブラウザだけで動作します。
+`possg genviewer`コマンドで生成される`viewer.html`は、`possg import`と同じzipファイルまたはフォルダの記事をドラッグ&ドロップするだけで、実際のテンプレート・CSSでレンダリングした結果をその場でプレビューできる単一の自己完結HTMLファイルです。Node.jsは不要で、ブラウザだけで動作します。
+
+zipファイルの代わりにフォルダをドロップした場合、もう一つ利点があります。「リロード」を押すたびにディスク上のフォルダを毎回スキャンし直すため、`index.md`や画像を編集した内容がzip再圧縮・再ドロップ無しでそのまま反映されます(フォルダのドラッグ&ドロップはFile System Access APIに依存するため、「リロード」自体と同じくChromium系ブラウザ限定です)。
 
 ただし、テンプレートがApacheのSSI(`<!--#include virtual="...">`)を使っている場合、`file:///`として直接開くとSSI部分だけ解決されません(詳細は後述)。SSIを使うテンプレートで完全に動作確認したい場合は、`viewer.html`をWebサーバでホスティングしてアクセスしてください。SSIを使わないテンプレートであれば`file:///`のままで問題ありません。
 
@@ -99,6 +101,33 @@ class customFunc {
 テンプレートがApacheのSSI(`<!--#include virtual="/path/to/x.html">`)を使っている場合は、customFunc側の対応は不要です。`viewer.html`はテンプレート中の全SSIディレクティブを自動検出し、その仮想パスをそのまま`fetch()`して内容を解決します(Apache SSIの`virtual=`とブラウザの絶対パスfetchは解決方式が同じため)。**同一オリジンでホスティングした場合のみ機能し、`file:///`では解決されません**(fetch失敗時はエラーをコンソールに出力するのみで、記事本体のレンダリングは継続します)。
 
 customFunc.mjsのクラス定義自体は`viewer.html`にも埋め込まれ、テンプレートレンダリング用の`func`としてブラウザ上でも使われます。そのため、これらのメソッドは**fs/path等のNode専用APIに依存させず、プレーンな値(配列)を返すだけ**にしてください。
+
+**`possg genviewer -static`: SSIをビルド時に解決する**
+
+`fetch()`によるSSI解決は`file:///`では原理的に動作しません(これはブラウザの`file://`スキームに対する制限であり、`fetch()`固有の問題ではありません。`XMLHttpRequest`に置き換えても解決しないことを確認済みです)。オフライン・`file:///`環境でも完全に自己完結したプレビューが必要な場合は、以下を実行します。
+
+```
+possg genviewer -static
+```
+
+これは`viewer.html`の代わりに、別ファイル`viewer-static.html`を生成します。SSIディレクティブをブラウザ側で都度解決する代わりに、`genViewer()`が生成時(Node側)に一度だけ解決し、その内容をテンプレートに直接埋め込みます。そのため、ブラウザ側のエンジンは`fetch()`する対象が最初から存在しない状態になります。
+
+利用するには、`customfunc.mjs`に`getViewerSSIBaseUrl()`メソッドを追加し、SSIの`virtual=`パスを解決する基準となるoriginを返すようにします。
+
+```js
+class customFunc {
+  // ...
+
+  // genViewer({static:true})実行時(Node側)に呼ばれる。SSIのvirtual=を解決する基準URLを返す
+  getViewerSSIBaseUrl() {
+    return "https://your-real-site.example.com";
+  }
+}
+```
+
+このメソッドが未定義の場合や、個別のSSIインクルードのfetchに失敗した場合でも、`genviewer -static`自体は中断しません。エラーをコンソールに出力した上で、該当ディレクティブの文字列をそのまま`viewer-static.html`に埋め込みます(ランタイム版と同じgraceful degradation)。
+
+トレードオフとして(名前の通り)、`viewer-static.html`はスナップショットです。SSIで参照している実際のコンテンツが後で更新されても、再度`possg genviewer -static`を実行するまで反映されません。SSIの内容を常に最新に保ちたい場合(かつホスティングできる場合)は通常の`viewer.html`を、`file:///`・オフラインで完全に動作させたい場合は`viewer-static.html`を使い分けてください。
 
 ## 主なconfig.mjsキー
 

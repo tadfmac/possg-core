@@ -88,6 +88,37 @@
     return base.startsWith(".");
   }
 
+  // zip/フォルダどちらから読んでも、以降の処理(frontmatter解析・レンダリング等)は
+  // 共通の { fileName, getBytes() } 形式で扱う
+  function entriesFromZip(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const allEntries = parseZipEntries(bytes);
+    return allEntries
+      .filter((e) => !isJunkEntry(e.fileName))
+      .map((e) => ({
+        fileName: e.fileName.split("/").pop(),
+        getBytes: () => extractEntryData(bytes, e)
+      }));
+  }
+
+  // possg importのフォルダ入稿と同じく、直下にindex.mdと画像等が並んだ
+  // フラットな構造を前提とする(サブフォルダは無視する)
+  async function entriesFromDirectoryHandle(dirHandle) {
+    const entries = [];
+    for await (const [name, handle] of dirHandle.entries()) {
+      if (handle.kind !== "file") continue;
+      if (isJunkEntry(name)) continue;
+      entries.push({
+        fileName: name,
+        getBytes: async () => {
+          const file = await handle.getFile();
+          return new Uint8Array(await file.arrayBuffer());
+        }
+      });
+    }
+    return entries;
+  }
+
   /* ---------- frontmatter ---------- */
 
   function splitFrontmatter(raw) {
@@ -157,15 +188,12 @@
 
   /* ---------- main pipeline ---------- */
 
-  async function processZipArrayBuffer(arrayBuffer, key) {
-    const bytes = new Uint8Array(arrayBuffer);
-    const allEntries = parseZipEntries(bytes);
-    const entries = allEntries.filter(e => !isJunkEntry(e.fileName));
+  // entries: [{ fileName, getBytes() }] (zip・フォルダ共通の抽象化)
+  async function processEntries(entries, key) {
+    const mdEntry = entries.find(e => e.fileName === "index.md");
+    if (!mdEntry) throw new Error("index.mdが見つかりません");
 
-    const mdEntry = entries.find(e => e.fileName.split("/").pop() === "index.md");
-    if (!mdEntry) throw new Error("zip内にindex.mdが見つかりません");
-
-    const mdBytes = await extractEntryData(bytes, mdEntry);
+    const mdBytes = await mdEntry.getBytes();
     const mdText = new TextDecoder("utf-8").decode(mdBytes);
     const { data: fm, content: body } = splitFrontmatter(mdText);
 
@@ -178,9 +206,8 @@
     const assetUrls = {};
     for (const e of entries) {
       if (e === mdEntry) continue;
-      const base = e.fileName.split("/").pop();
-      const data = await extractEntryData(bytes, e);
-      assetUrls[base] = URL.createObjectURL(new Blob([data]));
+      const data = await e.getBytes();
+      assetUrls[e.fileName] = URL.createObjectURL(new Blob([data]));
     }
 
     await loadHljs();
@@ -234,6 +261,14 @@
     });
   }
 
+  async function processZipArrayBuffer(arrayBuffer, key) {
+    return processEntries(entriesFromZip(arrayBuffer), key);
+  }
+
+  async function processDirectoryHandle(dirHandle, key) {
+    return processEntries(await entriesFromDirectoryHandle(dirHandle), key);
+  }
+
   /* ---------- UI wiring ---------- */
 
   const dropArea = document.getElementById("dropArea");
@@ -274,7 +309,7 @@
     '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>' +
     '<body style="margin:0;display:flex;align-items:center;justify-content:center;' +
     'height:100vh;font-family:sans-serif;color:#999;text-align:center;">' +
-    "<div>ここにzipファイルを<br>ドラッグ&amp;ドロップしてください</div>" +
+    "<div>ここにzipファイルまたはフォルダを<br>ドラッグ&amp;ドロップしてください</div>" +
     DROP_FORWARDER_SCRIPT +
     "</body></html>";
 
@@ -321,10 +356,24 @@
     );
   }
 
-  async function renderFile(file) {
+  // handleOrFile: FileSystemDirectoryHandle / FileSystemFileHandle / 素のFile(フォールバック経路)
+  async function renderFromHandle(handleOrFile) {
     setStatus("レンダリング中…");
     try {
-      if (!file) throw new Error("ファイルを取得できませんでした");
+      if (!handleOrFile) throw new Error("ファイル/フォルダを取得できませんでした");
+
+      if (handleOrFile.kind === "directory") {
+        const html = await processDirectoryHandle(handleOrFile, handleOrFile.name);
+        frame.srcdoc = withDropForwarder(withExternalResources(html));
+        setStatus(handleOrFile.name + "/");
+        return;
+      }
+
+      // FileSystemFileHandleならgetFile()で実体を取得、素のFileならそのまま使う
+      const file = (typeof handleOrFile.getFile === "function")
+        ? await handleOrFile.getFile()
+        : handleOrFile;
+
       const key = file.name.replace(/\.zip$/i, "");
       const buf = await file.arrayBuffer();
       const html = await processZipArrayBuffer(buf, key);
@@ -364,7 +413,7 @@
     const item = ev.dataTransfer.items && ev.dataTransfer.items[0];
     const fallbackFile = ev.dataTransfer.files && ev.dataTransfer.files[0];
     if (!item && !fallbackFile) {
-      setStatus("ファイルが取得できませんでした");
+      setStatus("ファイル/フォルダが取得できませんでした");
       return;
     }
 
@@ -379,16 +428,15 @@
 
     if (handle) {
       currentHandle = handle;
-      const file = await handle.getFile();
-      await renderFile(file);
+      await renderFromHandle(handle);
       return;
     }
 
     currentHandle = null;
     if (fallbackFile) {
-      await renderFile(fallbackFile);
+      await renderFromHandle(fallbackFile);
     } else {
-      setStatus("ファイルが取得できませんでした");
+      setStatus("ファイル/フォルダが取得できませんでした");
     }
   });
 
@@ -400,27 +448,22 @@
 
     if (ev.data.handle) {
       currentHandle = ev.data.handle;
-      const file = await currentHandle.getFile();
-      await renderFile(file);
+      await renderFromHandle(currentHandle);
     } else if (ev.data.buffer) {
       currentHandle = null;
       const file = { name: ev.data.name, arrayBuffer: () => Promise.resolve(ev.data.buffer) };
-      await renderFile(file);
+      await renderFromHandle(file);
     }
   });
 
   reloadBtn.addEventListener("click", async () => {
     if (!currentHandle) {
-      setStatus("先にzipファイルをドロップしてください");
+      setStatus("先にzipファイルまたはフォルダをドロップしてください");
       return;
     }
-    try {
-      const file = await currentHandle.getFile();
-      await renderFile(file);
-    } catch (err) {
-      console.error(err);
-      setStatus("再読み込みエラー: " + err.message);
-    }
+    // ディレクトリハンドルの場合はrenderFromHandle内で毎回フォルダを再走査するため、
+    // 直前のドロップ後にフォルダ内のファイルが更新されていてもそのまま反映される
+    await renderFromHandle(currentHandle);
   });
 
   // 動作検証用: ?testzip=<url> が指定された場合、fetch経由でzipを取得しレンダリングする
@@ -432,7 +475,7 @@
       .then(res => res.arrayBuffer())
       .then(buf => {
         const key = testZipUrl.split("/").pop().replace(/\.zip$/i, "");
-        return renderFile({ name: key + ".zip", arrayBuffer: () => Promise.resolve(buf) });
+        return renderFromHandle({ name: key + ".zip", arrayBuffer: () => Promise.resolve(buf) });
       })
       .catch(err => setStatus("テスト読み込みエラー: " + err.message));
   }

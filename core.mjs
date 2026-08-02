@@ -534,18 +534,63 @@ class PossgCore{
     }
     return fallback;
   }
-  async genViewer() {
-    if(DBG) console.log("PossgCore.genViewer()");
+  // genviewer -static 用。SSI(<!--#include virtual="X"-->)をビルド時に
+  // fetch()で解決し、テンプレート文字列中に直接埋め込む。ブラウザ側の
+  // resolveSSIIncludesViaFetch()は埋め込み済みHTMLに対しては何もしない
+  // (ディレクティブが残っていないため)ので、viewer-runtime.js側の変更は不要。
+  // baseUrlはvirtualPathの絶対パス解決の基準になるだけで、末尾のパスは無視される。
+  async #resolveSSIIncludesAtBuildTime(templateSource, baseUrl) {
+    const directiveRe = /<!--#include\s+virtual=["']([^"']+)["']\s*-->/g;
+    const virtualPaths = new Set();
+    let m;
+    while ((m = directiveRe.exec(templateSource)) !== null) {
+      virtualPaths.add(m[1]);
+    }
+    if (virtualPaths.size === 0) return templateSource;
+
+    let result = templateSource;
+    let failedCount = 0;
+    for (const virtualPath of virtualPaths) {
+      try {
+        const url = new URL(virtualPath, baseUrl).href;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const includeContent = await res.text();
+        const escapedVirtualPath = virtualPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`<!--#include\\s+virtual=["']${escapedVirtualPath}["']\\s*-->`, "g");
+        result = result.replace(re, includeContent);
+      } catch (err) {
+        failedCount++;
+        console.error(`genviewer -static: SSIインクルードの解決に失敗しました(${virtualPath}): ${err.message}`);
+      }
+    }
+    if (failedCount > 0) {
+      console.error(`genviewer -static: ${failedCount}件のSSIインクルードが未解決のまま埋め込まれました(viewer-static.htmlにディレクティブ文字列がそのまま残ります)`);
+    }
+    return result;
+  }
+  async genViewer({ static: isStatic = false } = {}) {
+    if(DBG) console.log("PossgCore.genViewer() isStatic = "+isStatic);
 
     const customFuncInstance = await this.#loadCustomFuncForViewer();
     const viewerExternalScripts = this.#callViewerHook(customFuncInstance, "getViewerExternalScripts", []);
     const viewerExternalStyles = this.#callViewerHook(customFuncInstance, "getViewerExternalStyles", []);
 
-    // SSI(<!--#include virtual="..."-->)はビルド時ではなく、ブラウザ側で
-    // customFunc.getViewerSSIIncludes()のURLをfetch()して都度解決する
-    // (viewer-runtime.js側で実施。ローカルファイルの追従管理が不要になる代わりに
-    // file:///では動作しない)
-    const templateSource = await fs.readFile(this.TEMPLATE_PATH, "utf8");
+    let templateSource = await fs.readFile(this.TEMPLATE_PATH, "utf8");
+
+    if (isStatic) {
+      // 通常はSSIをビルド時ではなくブラウザ側でfetch()して都度解決する
+      // (viewer-runtime.jsのresolveSSIIncludesViaFetch()、file:///では動作しない)。
+      // -staticはその逆で、ビルド時に解決して埋め込む代わりに、以後SSI参照先が
+      // 更新されても追従しない(再度 genviewer -static が必要)というトレードオフを持つ。
+      const ssiBaseUrl = this.#callViewerHook(customFuncInstance, "getViewerSSIBaseUrl", null);
+      if (ssiBaseUrl) {
+        templateSource = await this.#resolveSSIIncludesAtBuildTime(templateSource, ssiBaseUrl);
+      } else if (/<!--#include\s+virtual=/.test(templateSource)) {
+        console.error("genviewer -static: テンプレートにSSIディレクティブがありますが、customFunc.getViewerSSIBaseUrl()が未設定のため解決できません(ディレクティブ文字列がそのまま埋め込まれます)");
+      }
+    }
+
     const compiledFnSrc = ejs.compile(templateSource, { client: true }).toString();
 
     const cssPath = path.join(this.TEMPLATE_ROOT, "possg.css");
@@ -581,7 +626,7 @@ class PossgCore{
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>possg viewer</title>
+<title>possg viewer${isStatic ? " (static)" : ""}</title>
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
@@ -610,7 +655,7 @@ html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
 <body>
 <div id="app">
   <div id="dropArea">
-    <div>ここにzipをドラッグ&amp;ドロップ</div>
+    <div>ここにzip<br>またはフォルダを<br>ドラッグ&amp;ドロップ</div>
     <button id="reloadBtn" type="button">リロード</button>
     <div id="status"></div>
   </div>
@@ -648,7 +693,7 @@ ${escapeScriptClose(viewerRuntimeSrc)}
 </html>
 `;
 
-    const outPath = path.join(this.ROOT, "viewer.html");
+    const outPath = path.join(this.ROOT, isStatic ? "viewer-static.html" : "viewer.html");
     await fs.writeFile(outPath, html);
     return outPath;
   }
