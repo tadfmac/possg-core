@@ -19,6 +19,21 @@ import FmParser from "./libs/fmparser.mjs";
 
 const CORE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
+// genViewer()がmarkdown-it等のUMDビルドを直接読むために使う。
+// これらは"CORE_DIR/node_modules/<pkg>"に必ずあるとは限らない
+// (npmのインストール状況によっては、possg本体側にホイストされることがある)。
+// そのためNode本来のモジュール解決(import.meta.resolve)でパッケージの
+// 実際のインストール場所を特定する(possg.mjsのgetVersions()と同じ手法)。
+function resolvePackageRoot(pkgName) {
+  const resolvedPath = fileURLToPath(import.meta.resolve(pkgName));
+  const marker = path.sep + "node_modules" + path.sep + pkgName + path.sep;
+  const idx = resolvedPath.lastIndexOf(marker);
+  if (idx === -1) {
+    throw new Error(`${pkgName}のインストール場所を特定できませんでした`);
+  }
+  return resolvedPath.slice(0, idx + marker.length - 1);
+}
+
 function escapeScriptClose(str) {
   return str
     .replace(/<\/script/gi, "<\\/script")
@@ -605,10 +620,9 @@ class PossgCore{
       : "class customFunc {}";
     const viewerRuntimeSrc = await fs.readFile(path.join(CORE_DIR, "libs", "viewer-runtime.js"), "utf8");
 
-    const nodeModulesRoot = path.join(CORE_DIR, "node_modules");
-    const markdownItSrc = await fs.readFile(path.join(nodeModulesRoot, "markdown-it", "dist", "markdown-it.js"), "utf8");
-    const imageFiguresSrc = await fs.readFile(path.join(nodeModulesRoot, "markdown-it-image-figures", "dist", "markdown-it-images-figures.umd.js"), "utf8");
-    const jsYamlSrc = await fs.readFile(path.join(nodeModulesRoot, "js-yaml", "dist", "js-yaml.min.js"), "utf8");
+    const markdownItSrc = await fs.readFile(path.join(resolvePackageRoot("markdown-it"), "dist", "markdown-it.js"), "utf8");
+    const imageFiguresSrc = await fs.readFile(path.join(resolvePackageRoot("markdown-it-image-figures"), "dist", "markdown-it-images-figures.umd.js"), "utf8");
+    const jsYamlSrc = await fs.readFile(path.join(resolvePackageRoot("js-yaml"), "dist", "js-yaml.min.js"), "utf8");
 
     const viewerConfig = {
       iconurl: this.ICON_URL,
