@@ -32,7 +32,9 @@ Registers a single article. `sourcePath` can be **a zip file or a folder**.
 - Either way, it's expected to contain `index.md` (markdown with front matter) plus assets like images directly underneath it
 - Importing with a key that's already registered overwrites the existing record
 - An imported article is always placed into **staging (draft) state**
+- Only files actually referenced are copied into the article's asset folder; any other file present in the zip/folder (unused images, `.DS_Store`, etc.) is left behind. A file counts as referenced if either is true: its name appears anywhere as a string value in the front matter YAML (not limited to any specific key like `images` — any key, nested object, or list is scanned), or it's the target of a markdown link or image (`[text](file)` / `![alt](file)`, any extension — PDFs and other non-image attachments included). A markdown reference to a missing local file is skipped with a console warning instead of failing the import; front matter strings that don't match an actual file (titles, tags, dates, etc.) are silently ignored, not warned about. Absolute URLs (`http://`, `https://`, `data:`, etc.) are never treated as local files to copy
 - Detects the first image referenced from the markdown body or the frontmatter's `images`, and automatically generates a thumbnail at the size configured in `THUMBNAIL`
+- Re-importing the same key never leaves stale files behind: the article's previous physical location (whichever of staging/content it was in, even a different year) is fully removed before the new assets are written, so images/thumbnails no longer referenced by the new content don't linger, and a previously-released article is correctly demoted back to a clean staging folder
 
 ### `async publish(key, isRelease)`
 

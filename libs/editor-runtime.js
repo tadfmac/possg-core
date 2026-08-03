@@ -9,6 +9,13 @@
   const cfg = window.__EDITOR_CONFIG__ || {};
   const isEnableYamlImage = !!cfg.yamlImageEnabled;
 
+  // localStorageのキーをアプリごと(genEditor()呼び出し元のルートパス由来のハッシュ)に
+  // 分離する。file://で開いた場合、異なるディレクトリのHTMLでも同一originとして
+  // localStorageを共有してしまうブラウザがあり、そのままだと別アプリのeditor.html間で
+  // トリミングサイズ・テンプレート・言語設定が混ざってしまうため。
+  const STORAGE_NS = cfg.appNamespace ? `__${cfg.appNamespace}` : "";
+  function nsKey(key) { return key + STORAGE_NS; }
+
   let mdFiles = new Map();
   let yamlFiles = new Map();
 
@@ -21,7 +28,7 @@
   // デフォルトは英語。このブラウザのエディタでのみ有効な設定として
   // localStorageに保存し、次回起動時も同じ言語で開く。
 
-  const LANG_KEY = "article_editor_lang";
+  const LANG_KEY = nsKey("article_editor_lang");
 
   const I18N = {
     en: {
@@ -322,7 +329,7 @@
     ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.06)" },
     ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.1)" },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": { backgroundColor: "rgba(255,255,255,0.25) !important" },
-    ".cm-highlightSpace:before": { color: "rgba(255,255,255,0.25)" }
+    ".cm-highlightSpace:before": { color: "rgba(255,255,255,0.12)" }
   }, { dark: true });
 
   // config.mjs由来の初期本文プレースホルダーはNode側(#buildDefaultArticleText())で
@@ -335,7 +342,7 @@
     return text;
   }
 
-  const savedTemplate = localStorage.getItem("article_editor_template");
+  const savedTemplate = localStorage.getItem(nsKey("article_editor_template"));
   const initialDoc = savedTemplate || localizeDefaultContent(cfg.defaultContent || "");
 
   const changeListener = CM.EditorView.updateListener.of((update) => {
@@ -374,7 +381,7 @@
   // ここで設定するトリミングサイズはこのブラウザのエディタでのみ有効な値であり、
   // possg importやconfig.mjsのDEFAULT_TRIMそのものを書き換えるものではない。
 
-  const TRIM_SIZE_KEY = "article_editor_trim_size";
+  const TRIM_SIZE_KEY = nsKey("article_editor_trim_size");
 
   function getTrimSize() {
     try {
@@ -408,7 +415,7 @@
   document.addEventListener("click", () => settingsMenu.classList.add("hidden"));
 
   document.getElementById("save-template-item").onclick = () => {
-    localStorage.setItem("article_editor_template", getValue());
+    localStorage.setItem(nsKey("article_editor_template"), getValue());
     setLoadSaveStatus(t("statusTemplateSaved"));
     settingsMenu.classList.add("hidden");
   };
@@ -488,21 +495,31 @@
     return "image/png";
   }
 
-  function updateTrimCropRect(session) {
-    const scaleToCanvas = Math.min(trimCanvas.width / session.clipW, trimCanvas.height / session.clipH);
-    const w = session.clipW * scaleToCanvas;
-    const h = session.clipH * scaleToCanvas;
-    session.cropRect = { w, h, x: (trimCanvas.width - w) / 2, y: (trimCanvas.height - h) / 2 };
-  }
-
-  // クロップ枠を覆うように(cover)配置しつつ、小さい画像は拡大しない(参考実装と同じ)
+  // クロップ枠とドラッグ用のスケールを、実画像サイズとトリミングサイズ(clipW×clipH)を
+  // 比較した上で決める。ワークスペースの表示倍率(scaleToCanvas)は画面上の見た目の
+  // 拡大率でしかなく、実際に画像を拡大するかどうかの判定に使ってはいけない
+  // (以前の実装は表示倍率込みの値を1と比較してクランプしていたため、DEFAULT_TRIM等の
+  // トリミングサイズがワークスペースより大きい場合に、クランプ後の値をそのままexport側の
+  // スケールとして使い回してしまい、小さい画像が意図せず拡大される不具合があった)。
+  //
+  // - 画像がトリミングサイズをカバーできる大きさの場合(boxScale=1): 枠はトリミングサイズの
+  //   まま、画像側をカバー配置に縮小してドラッグする(従来通りの挙動)。
+  // - 画像がトリミングサイズより小さい場合(boxScale<1): 画像は等倍(拡大しない)のまま、
+  //   枠自体をトリミングサイズと同じ縦横比を保ちつつ実画像に収まる大きさへ縮小する。
+  //   縦横比が画像と一致しない軸には余白(ドラッグ可能な範囲)が残る。
   function fitTrimImageToCrop(session) {
-    const cropRect = session.cropRect;
-    let scale = Math.max(cropRect.w / session.img.width, cropRect.h / session.img.height);
-    scale = Math.min(scale, 1);
-    session.scale = scale;
-    session.imgX = cropRect.x + (cropRect.w - session.img.width * scale) / 2;
-    session.imgY = cropRect.y + (cropRect.h - session.img.height * scale) / 2;
+    const scaleToCanvas = Math.min(trimCanvas.width / session.clipW, trimCanvas.height / session.clipH);
+
+    const boxScale = Math.min(1, session.img.width / session.clipW, session.img.height / session.clipH);
+    const realScale = Math.min(1, Math.max(session.clipW / session.img.width, session.clipH / session.img.height));
+
+    const w = session.clipW * boxScale * scaleToCanvas;
+    const h = session.clipH * boxScale * scaleToCanvas;
+    session.cropRect = { w, h, x: (trimCanvas.width - w) / 2, y: (trimCanvas.height - h) / 2 };
+
+    session.scale = realScale * scaleToCanvas;
+    session.imgX = session.cropRect.x + (session.cropRect.w - session.img.width * session.scale) / 2;
+    session.imgY = session.cropRect.y + (session.cropRect.h - session.img.height * session.scale) / 2;
   }
 
   function drawTrim(session) {
@@ -545,7 +562,6 @@
         scale: 1, imgX: 0, imgY: 0,
         dragging: false, startX: 0, startY: 0
       };
-      updateTrimCropRect(session);
       fitTrimImageToCrop(session);
       trimSession = session;
       drawTrim(session);
@@ -633,9 +649,17 @@
     if (!session) return;
 
     const { cropRect, img, scale, imgX, imgY, fileInfo, mapKind } = session;
+
+    // 画像がトリミングサイズより小さい場合、出力もトリミングサイズそのまま(拡大)に
+    // せず、実画像に収まる大きさ(fitTrimImageToCropのboxScaleと同じ計算)に縮小する。
+    // 画像がトリミングサイズをカバーできる場合は従来通りトリミングサイズちょうどにする。
+    const boxScale = Math.min(1, img.width / session.clipW, img.height / session.clipH);
+    const outW = Math.round(session.clipW * boxScale);
+    const outH = Math.round(session.clipH * boxScale);
+
     const outCanvas = document.createElement("canvas");
-    outCanvas.width = session.clipW;
-    outCanvas.height = session.clipH;
+    outCanvas.width = outW;
+    outCanvas.height = outH;
     const outCtx = outCanvas.getContext("2d");
 
     const srcX = (cropRect.x - imgX) / scale;
@@ -647,9 +671,9 @@
     if (mimeType === "image/jpeg") {
       // JPEGは透過不可のため白で塗ってから描画する(PNG/WEBPは透過を保持)
       outCtx.fillStyle = "#fff";
-      outCtx.fillRect(0, 0, session.clipW, session.clipH);
+      outCtx.fillRect(0, 0, outW, outH);
     }
-    outCtx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, session.clipW, session.clipH);
+    outCtx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
 
     outCanvas.toBlob((blob) => {
       if (!blob) { setLoadSaveStatus(t("statusTrimGenFailed")); return; }

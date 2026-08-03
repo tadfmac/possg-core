@@ -38,6 +38,47 @@ function escapeHtml(str) {
   return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// geneditorが使うlocalStorageキー(トリミングサイズ/テンプレート保存/言語設定)を
+// アプリごとに分離するための名前空間文字列を、非暗号学的ハッシュ(FNV-1a)で作る。
+// file://で開いた場合、異なるディレクトリのHTMLでも同一originとしてlocalStorageを
+// 共有してしまうブラウザがあるため、genEditor()呼び出し元(アプリのルートパス)を
+// 元にした短い識別子をキーに付与し、別アプリのeditor.html間で設定が混ざらないようにする。
+function hashString(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+// YAMLのfrontmatterオブジェクトを再帰的に走査し、キー名を問わず全ての文字列値をoutに集める。
+// (importでの「YAML領域のどこかにファイル名が書かれていれば取り込み対象にする」判定に使う)
+function collectStringValues(value, out) {
+  if (typeof value === "string") {
+    out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const v of value) collectStringValues(v, out);
+  } else if (value && typeof value === "object") {
+    for (const v of Object.values(value)) collectStringValues(v, out);
+  }
+}
+
+// 参照候補の文字列群から、ローカルファイルへの相対パスとみなせるものだけを正規化して返す。
+// http(s)/data等の絶対URL・プロトコル相対URLは実体を持たないため除外する。
+function normalizeLocalRefs(candidates) {
+  const result = new Set();
+  for (const ref of candidates) {
+    if (!ref || typeof ref !== "string") continue;
+    if (ref.startsWith("//")) continue; // プロトコル相対URL
+    if (/^[a-z][a-z0-9+.-]*:/i.test(ref)) continue; // http:, https:, data: 等の絶対URL
+    let decoded = ref;
+    try { decoded = decodeURIComponent(ref); } catch { /* 不正なエンコードはそのまま扱う */ }
+    result.add(decoded.replace(/^\.\//, ""));
+  }
+  return result;
+}
+
 // geneditorのアイコンは絵文字ではなくMaterial Design Icons(MDI, https://pictogrammers.com/library/mdi/)の
 // 単色SVGパスをインライン埋め込みで使用する(実行時のCDN依存を避けるため、ビルド時にパスデータのみ取得・埋め込み)。
 // fillはcurrentColorとし、各ボタンのCSS color値(背景とのコントラストを考慮して個別設定)に追従させる。
@@ -184,6 +225,12 @@ class PossgCore{
     const body = parsed.content.trim();
     const year = datetime.slice(0, 4);
 
+    // 再import時に旧フォルダの資産(画像・旧HTML)が残らないよう、上書き前に
+    // 既存レコードの物理的な所在(staging/contentどちらか、旧年)を控えておく
+    const existing = await new Promise(r =>
+      this.db.findOne({ _id: key }, (_, d) => r(d))
+    );
+
     // DB upsert
     await new Promise((res, rej) =>
       this.db.update(
@@ -194,13 +241,35 @@ class PossgCore{
       )
     );
 
-    // assets
+    if (existing) {
+      const oldYear = existing.datetime.slice(0, 4);
+      const oldRoot = existing.release ? this.CONTENT_ROOT : this.STAGING_ROOT;
+      await fs.remove(path.join(oldRoot, oldYear, key));
+      await this.#removeDirIfEmpty(path.join(oldRoot, oldYear));
+      // importは常にstagingへ戻すため、旧年が違う・旧release=trueだった場合は
+      // 消えた記事の隣接記事のnavを作り直す必要がある(旧年=新年かつ旧release=false
+      // の通常の再importは、この後の通常フローのrebuildNavAroundで賄える)
+      if (existing.release || oldYear !== year) {
+        await this.rebuildNavAround({ year: oldYear, isStaging: !existing.release });
+      }
+    }
+
+    // assets: YAML領域(frontmatter全体、特定のキーに限定しない)またはmarkdown本文の
+    // リンク・画像記法で参照されているファイルだけを取り込む(拡張子は問わない)。
+    // 参照されていないファイルはzip/フォルダ内にあってもコピーしない
     const base = path.join(this.STAGING_ROOT, year, key);
     await fs.ensureDir(base);
-    for (const f of await fs.readdir(path.join(this.TMP_PATH, key))) {
-      if (f !== "index.md") {
-        await fs.copy(path.join(this.TMP_PATH, key, f), path.join(base, f));
+    const sourceDir = path.join(this.TMP_PATH, key);
+    const referencedAssets = await this.#collectReferencedAssets({ frontmatter: parsed.data, body, sourceDir });
+    for (const rel of referencedAssets) {
+      const src = path.join(sourceDir, rel);
+      if (!(await fs.pathExists(src))) {
+        console.error(`import: referenced asset not found, skipped: ${rel}`);
+        continue;
       }
+      const dest = path.join(base, rel);
+      await fs.ensureDir(path.dirname(dest));
+      await fs.copy(src, dest);
     }
 
     // 画像候補取得
@@ -292,6 +361,36 @@ class PossgCore{
       text = text.slice(0, maxLength)+"…";
     }
     return text;
+  }
+  // YAML領域(frontmatter全体)とmarkdown本文中のリンク・画像記法から、importで
+  // 実際に取り込むべきローカルファイルの参照名を収集する(拡張子は問わない)。
+  // - YAML側は特定のキー名(images等)に限定せず全ての文字列値を候補にし、
+  //   実際にsourceDir配下に存在するファイルと一致するものだけを採用する
+  //   (title/datetime/tagsのような非ファイル参照の文字列は、この実在チェックで
+  //   自然に除外される)
+  // - markdown側は`[text](url)`/`![alt](url)`両方の記法をリンク先ごと収集する
+  //   (存在しない場合は呼び出し側で警告してスキップする対象として、そのまま返す)
+  async #collectReferencedAssets({ frontmatter, body, sourceDir }) {
+    const yamlCandidates = [];
+    collectStringValues(frontmatter, yamlCandidates);
+    const fromYaml = new Set();
+    for (const ref of normalizeLocalRefs(yamlCandidates)) {
+      if (await fs.pathExists(path.join(sourceDir, ref))) {
+        fromYaml.add(ref);
+      }
+    }
+
+    const mdCandidates = [];
+    if (body) {
+      const re = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        mdCandidates.push(m[1]);
+      }
+    }
+    const fromMarkdown = normalizeLocalRefs(mdCandidates);
+
+    return new Set([...fromYaml, ...fromMarkdown]);
   }
   #getIndexImage(article) {
     if (!article) return null;
@@ -847,7 +946,8 @@ ${escapeScriptClose(viewerRuntimeSrc)}
       defaultContent: this.#buildDefaultArticleText(),
       yamlImageEnabled: this.#hasYamlImageField(),
       defaultTrim: this.DEFAULT_TRIM,
-      defaultLang: this.LANG
+      defaultLang: this.LANG,
+      appNamespace: hashString(this.ROOT)
     };
 
     const pageTitle = title ? title : `possg editor${isStatic ? " (static)" : ""}`;
@@ -955,7 +1055,7 @@ header {
 #save-btn { display: none; }
 #load-save-status { display: none; position: absolute; bottom: 22px; left: 0; right: 0; text-align: center; font-size: 11px; color: #444; background: rgba(255,255,255,0.9); padding: 2px 0; }
 
-.cm-zenkaku-space { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2); }
+.cm-zenkaku-space { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .cm-yaml-sep, .cm-yaml-list-marker { color: #c586c0 !important; font-weight: bold; }
 .cm-yaml-key { color: #9cdcfe !important; }
 .cm-yaml-val-str { color: #ce9178 !important; }
