@@ -29,6 +29,10 @@ class FmParser{
   }
   #normalize(value, rule) {
     if (!rule) return null;
+    // 値が書かれていない場合は型変換を行わない。String(undefined)が文字列"undefined"に
+    // なってしまうため、省略された任意項目(core/meta、オブジェクト配列の各プロパティ)が
+    // 値を持っているかのように扱われるのを防ぐ
+    if (value === undefined || value === null) return null;
     const type = rule.type;
     switch (type) {
       case "string": return String(value);

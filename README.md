@@ -11,6 +11,7 @@ A simple SSG core for blogs.
 - Uses a lightweight JSON DB ([@seald-io/nedb](https://github.com/seald/nedb)) — no dedicated DB server needed
 - Two-state management: staging (draft) / content (published)
 - Automatic tag-based index pages, driven by frontmatter `tags`
+- Automatic generation of an all-articles list in JSON (`alllist.json`), regenerated alongside the index pages
 - Syntax highlighting for code blocks (at build time, via [highlight.js](https://highlightjs.org/))
 - For `possg genviewer`: generates HTML that lets you preview a zip file or folder article via drag-and-drop, in the browser alone
 - For `possg geneditor`: generates a self-contained article editor with a live preview, using the same rendering engine
@@ -34,6 +35,8 @@ Registers a single article. `sourcePath` can be **a zip file or a folder**.
 - An imported article is always placed into **staging (draft) state**
 - Only files actually referenced are copied into the article's asset folder; any other file present in the zip/folder (unused images, `.DS_Store`, etc.) is left behind. A file counts as referenced if either is true: its name appears anywhere as a string value in the front matter YAML (not limited to any specific key like `images` — any key, nested object, or list is scanned), or it's the target of a markdown link or image (`[text](file)` / `![alt](file)`, any extension — PDFs and other non-image attachments included). A markdown reference to a missing local file is skipped with a console warning instead of failing the import; front matter strings that don't match an actual file (titles, tags, dates, etc.) are silently ignored, not warned about. Absolute URLs (`http://`, `https://`, `data:`, etc.) are never treated as local files to copy
 - Detects the first image referenced from the markdown body or the frontmatter's `images`, and automatically generates a thumbnail at the size configured in `THUMBNAIL`
+- Every field of `frontmatter.core` is stored in the DB, not just `title`/`datetime` (they are read back by `alllist.json`). Optional fields the article doesn't define are not stored
+- The import fails if a required `frontmatter.core` field is missing or malformed (the error message names the offending `index.md`)
 - Re-importing the same key never leaves stale files behind: the article's previous physical location (whichever of staging/content it was in, even a different year) is fully removed before the new assets are written, so images/thumbnails no longer referenced by the new content don't linger, and a previously-released article is correctly demoted back to a clean staging folder
 
 ### `async publish(key, isRelease)`
@@ -50,7 +53,11 @@ Deletes every registered article.
 
 ### `async buildAll()`
 
-Regenerates article HTML, nav, index, and tag indexes all at once, based on what's in the DB. Useful for propagating changes after editing a template.
+Regenerates article HTML, nav, index, tag indexes, and `alllist.json` all at once, based on what's in the DB. Useful for propagating changes after editing a template.
+
+### `async buildAllList({ isStaging })`
+
+Generates the all-articles list in JSON (`alllist.json`) directly under staging when `isStaging` is `true`, or under content when it's `false`. Both are called automatically by everything that regenerates the indexes (`import`/`publish`/`remove`/`removeAll`/`buildAll`), so you normally don't need to call it yourself. See "All-Articles List (alllist.json)" below for details.
 
 ### `async genViewer()`
 
@@ -69,6 +76,57 @@ Specify tags in `meta.tags` of an article's frontmatter (defined via `frontmatte
 - Right after the description text on each index page, a tag list is shown (with counts, and the currently selected tag highlighted). An "All" entry is always shown first, linking back to the unfiltered article list
 - Tag pages no longer referenced by any article are automatically deleted the next time content is regenerated
 - On apps that don't define the `frontmatter.meta.tags` schema at all, the entire tag feature is disabled (neither the tag list nor any tag pages are generated)
+
+## All-Articles List (alllist.json)
+
+Every time the index pages are regenerated (`import`/`publish`/`unpublish`/`remove`/`removeAll`/`buildAll`), a JSON file listing all articles is written directly under both staging and content. It lets you retrieve the article list without parsing any HTML — useful for client-side search, archive pages, or references from another app.
+
+- Output location: `contents/alllist.json`, `staging/alllist.json` (configurable via `ALLLIST_FILE_NAME` in config.mjs; default `"alllist.json"`)
+- The set of articles covered matches the index pages: the staging side spans drafts plus published articles, while the content side holds published ones only
+- Articles are sorted by datetime, newest first
+- If there are no articles to list, no file is generated (the existing file is always removed before regenerating, whether or not a new one is written, so a stale list is never left behind)
+
+The fields written out are:
+
+| Field | Contents |
+|---|---|
+| `key` | The article's DB key (the imported zip filename / folder name) |
+| Every field of `frontmatter.core` | `title`, `datetime`, etc. Optional fields the article doesn't define are omitted |
+| Fields of `frontmatter.meta` marked `listup: true` | Add `listup: true` to the schema of each meta field you want listed (below) |
+| `link` | The article's URL. It's derived from the article's own release state, so a published article appearing in the staging-side list links to its real URL on the content side |
+| `release` | `true` if published, `false` if still a draft |
+
+```js
+"meta": {
+  "tags": {
+    "type": "array",
+    "items": { "type": "string" },
+    "required": false,
+    "listup": true    // <- include this field in alllist.json
+  }
+}
+```
+
+Example output:
+
+```json
+{
+  "count": 2,
+  "items": [
+    {
+      "key": "20260126",
+      "title": "たぬき表示テストです。",
+      "datetime": "20260126 15:00",
+      "tags": ["テスト", "たぬき"],
+      "link": "/staging/2026/20260126/",
+      "release": false
+    }
+  ]
+}
+```
+
+- `key`/`link`/`release` are reserved fields possg always writes. If you define a frontmatter field with one of those names, that field is excluded from the output (with a console warning)
+- `core` fields other than `title`/`datetime` are stored in the DB **at import time**. If you add a `core` field later, existing articles won't show a value for it in `alllist.json` until they are re-imported (`buildAll()` only uses what's in the DB — it never re-parses front matter)
 
 ## Staging/Release Model
 
@@ -176,11 +234,12 @@ Clicking an image's delete icon always asks for confirmation first (a native con
 |---|---|
 | `WWW_DIR` / `CONTENT_DIR` / `STAGING_DIR` | Output directory layout |
 | `TAGS_DIR` | Output folder name for tag-based indexes (defaults to `"tags"` if omitted) |
+| `ALLLIST_FILE_NAME` | Filename of the all-articles list JSON (defaults to `"alllist.json"` if omitted) |
 | `TEMPLATE_DIR` / `TEMPLATE_FILE_NAME` / `IDX_TEMPLATE_FILE_NAME` | Location and filenames of the templates |
 | `CUSTOMFUNC_DIR` / `CUSTOMFUNC_FILE_NAME` | Location of customfunc.mjs |
 | `CONTENT_URL_BASE` / `STAGING_URL_BASE` | URL base for published/draft pages |
 | `ICON_URL` / `CSS_URL` / `JS_URL` | URLs for the favicon, possg.css, and possg.js (all optional — if omitted, the corresponding tag simply isn't output on the template side) |
-| `frontmatter` | The frontmatter schema definition (`core` holds required fields, `meta` holds optional ones; defining `meta.tags` turns on the tag feature) |
+| `frontmatter` | The frontmatter schema definition (`core` holds required fields, `meta` holds optional ones; defining `meta.tags` turns on the tag feature; marking a `meta` field with `listup: true` writes it into `alllist.json`) |
 | `INDEX_PAGE_SIZE` | Number of articles per page in the article list |
 | `THUMBNAIL` | Thumbnail generation size (`width`/`height`) |
 | `DEFAULT_TRIM` | Default crop size for geneditor's image trim tool (`width`/`height`); falls back to `1280`x`720` if missing or invalid |

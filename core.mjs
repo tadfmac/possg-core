@@ -101,6 +101,10 @@ const MDI_PATHS = {
   upload: "M9,16V10H5L12,3L19,10H15V16H9M5,20V18H19V20H5Z"
 };
 
+// alllist.jsonの各エントリでpossgが必ず出力するフィールド名。frontmatterのcore/metaに
+// 同名のキーが定義されていた場合、そちらは出力対象から除外する(possg側の値が常に優先)
+const ALLLIST_RESERVED_KEYS = new Set(["key", "link", "release"]);
+
 function escapeScriptClose(str) {
   return str
     .replace(/<\/script/gi, "<\\/script")
@@ -124,6 +128,8 @@ class PossgCore{
     if(DBG) console.log("STAGING_ROOT = "+this.STAGING_ROOT);
     this.TAGS_DIR = config.TAGS_DIR ?? "tags"; // TAGS_DIR = "tags"
     if(DBG) console.log("TAGS_DIR = "+this.TAGS_DIR);
+    this.ALLLIST_FILE_NAME = config.ALLLIST_FILE_NAME ?? "alllist.json"; // ALLLIST_FILE_NAME = "alllist.json"
+    if(DBG) console.log("ALLLIST_FILE_NAME = "+this.ALLLIST_FILE_NAME);
     this.TMP_PATH = path.join(this.ROOT,config.TMP_DIR); // TMP_DIR = ".tmp"
     if(DBG) console.log("TMP_PATH = "+this.TMP_PATH);
     this.DB_ROOT = path.join(this.ROOT,config.DB_DIR); // DB_DIR = "db"
@@ -220,8 +226,12 @@ class PossgCore{
     const coreData = this.fmParser.parseCore(parsed.data);
     const meta = this.fmParser.parseMeta(parsed.data);
 
+    // parseCore()はfrontmatter.coreの必須項目が欠けているとnullを返す
+    if (!coreData) {
+      throw new Error(`front matter of required field is missing or invalid: ${key}/index.md`);
+    }
 
-    const { title, datetime } = coreData;
+    const { datetime } = coreData;
     const body = parsed.content.trim();
     const year = datetime.slice(0, 4);
 
@@ -232,10 +242,14 @@ class PossgCore{
     );
 
     // DB upsert
+    // coreはtitle/datetimeに限らず、設定された項目を全てそのまま保存する
+    // (alllist.jsonがcore全項目を列挙できるようにするため)。
+    // _id/meta/body/releaseはpossg側の予約フィールドなので、coreに同名の項目が
+    // 定義されていても上書きされないよう後置する
     await new Promise((res, rej) =>
       this.db.update(
         { _id: key },
-        { $set: { _id: key, title, datetime, meta, body, release: false } },
+        { $set: { ...coreData, _id: key, meta, body, release: false } },
         { upsert: true },
         e => (e ? rej(e) : res())
       )
@@ -1239,6 +1253,75 @@ ${escapeScriptClose(editorRuntimeSrc)}
       await this.buildTagIndexes({ isStaging: true });
       await this.buildTagIndexes({ isStaging: false });
     }
+    await this.buildAllList({ isStaging: true });
+    await this.buildAllList({ isStaging: false });
+  }
+  // alllist.jsonに出力するfrontmatter項目名を、config.mjsのスキーマから決める。
+  // coreは全項目、metaは`listup: true`の項目のみが対象。possgが必ず出力する
+  // 予約フィールド(key/link/release)と衝突する定義は警告して除外する
+  #collectAllListKeys() {
+    const setting = this.fmParser?.setting ?? {};
+    const coreKeys = [];
+    const metaKeys = [];
+    for (const key of Object.keys(setting.core ?? {})) {
+      if (ALLLIST_RESERVED_KEYS.has(key)) {
+        console.error(`alllist: skip reserved key in frontmatter.core: ${key}`);
+        continue;
+      }
+      coreKeys.push(key);
+    }
+    for (const [key, rule] of Object.entries(setting.meta ?? {})) {
+      if (!rule?.listup) continue;
+      if (ALLLIST_RESERVED_KEYS.has(key)) {
+        console.error(`alllist: skip reserved key in frontmatter.meta: ${key}`);
+        continue;
+      }
+      metaKeys.push(key);
+    }
+    return { coreKeys, metaKeys };
+  }
+  #buildAllListItem(article, { coreKeys, metaKeys }) {
+    const item = { key: article._id };
+    for (const key of coreKeys) {
+      if (article[key] !== undefined) item[key] = article[key];
+    }
+    for (const key of metaKeys) {
+      const value = article.meta?.[key];
+      if (value !== undefined) item[key] = value;
+    }
+    // 記事の実体は常にstaging/contentのどちらか一方にしか無いため、リンク先は
+    // 出力先ではなくその記事自身のrelease状態で決める(index/navと同じ規則)
+    const linkBase = article.release ? this.CONTENT_URL_BASE : this.STAGING_URL_BASE;
+    item.link = `${linkBase}/${article.datetime.slice(0, 4)}/${article._id}/`;
+    item.release = Boolean(article.release);
+    return item;
+  }
+  // 記事一覧(全件)のJSONを、staging/contentそれぞれの直下に生成する。
+  // 記事が0件の場合はファイル自体を生成しない(古い内容が残らないよう、
+  // 生成の有無に関わらず既存ファイルは常に削除してから作り直す)
+  async buildAllList({ isStaging }) {
+    if(DBG) console.log("PossgCore.buildAllList() isStaging = "+isStaging);
+    const query = isStaging ? {} : { release: true };
+
+    const articles = await new Promise(resolve => {
+      this.db.find(query, (_, docs) => resolve(docs));
+    });
+
+    const outDir = (isStaging)? this.STAGING_ROOT : this.CONTENT_ROOT;
+    const outPath = path.join(outDir, this.ALLLIST_FILE_NAME);
+    await fs.remove(outPath);
+
+    const keys = this.#collectAllListKeys();
+    const items = articles
+      .filter(a => a.datetime)
+      .sort((a, b) => b.datetime.localeCompare(a.datetime))
+      .map(a => this.#buildAllListItem(a, keys));
+
+    if (items.length === 0) return null;
+
+    await fs.ensureDir(outDir);
+    await fs.writeFile(outPath, JSON.stringify({ count: items.length, items }, null, 2));
+    return outPath;
   }
   #tagsEnabled() {
     return Boolean(this.fmParser?.setting?.meta?.tags);

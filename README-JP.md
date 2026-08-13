@@ -11,6 +11,7 @@
 - 軽量JSON DB([@seald-io/nedb](https://github.com/seald/nedb))を利用。特別なDBサーバ不要
 - staging(下書き)/content(公開)の2状態管理
 - frontmatterの`tags`によるタグ別indexページの自動生成
+- 全記事一覧JSON(`alllist.json`)の自動生成(indexの再生成と同じタイミング)
 - コードブロックのシンタックスハイライト(ビルド時、[highlight.js](https://highlightjs.org/))
 - `possg genviewer`用: zipファイルまたはフォルダの記事をブラウザ単体でドラッグ&ドロッププレビューできるHTMLの生成
 - `possg geneditor`用: 同じレンダリングエンジンによるライブプレビュー付きの自己完結型記事エディタの生成
@@ -34,6 +35,8 @@ DB接続、MarkdownItインスタンスの構築、`customfunc.mjs`の読み込�
 - importした記事は必ず**staging(下書き)状態**になります
 - 実際に参照されているファイルだけが記事のアセットフォルダに取り込まれます。zip/フォルダ内にあっても参照されていないファイル(未使用の画像、`.DS_Store`等)は取り込まれません。「参照されている」とは、(1)front matterのYAML領域のどこかにそのファイル名が文字列値として書かれている(`images`のような特定のキーに限定せず、任意のキー・ネストしたオブジェクト・リストの中まで走査します)、または(2)markdown本文中のリンク・画像記法(`[text](file)` / `![alt](file)`、拡張子は問わずPDF等の非画像添付も対象)の参照先になっている、のいずれかです。markdown側の参照先がローカルファイルとして見つからない場合はimportを失敗させず、コンソール警告を出して該当ファイルをスキップします。一方、front matter中の文字列(タイトル・タグ・日付等)が実在ファイルと一致しない場合は、警告無しで単に取り込み対象外として扱われます。`http://`/`https://`/`data:`等の絶対URLはローカルファイルとして取り込み対象にしません
 - markdown本文またはfrontmatterの`images`から最初の画像を検出し、`THUMBNAIL`設定のサイズでサムネイルを自動生成します
+- `frontmatter.core`の項目は`title`/`datetime`に限らず全てDBに保存されます(`alllist.json`から参照されます)。記事に書かれていない任意項目は保存されません
+- `frontmatter.core`の必須項目が欠けている・形式が不正な場合はimportが失敗します(エラーメッセージに対象の`index.md`を表示します)
 - 同じkeyを再importしても旧ファイルが残りません。記事が以前存在していた実フォルダ(staging/contentのどちらか、旧年であっても)を新しいアセット書き込み前に完全に削除するため、新しい内容で参照されなくなった画像・サムネイルが残留することはなく、公開済み(release)だった記事を再importした場合も正しくクリーンなstagingフォルダへ差し戻されます
 
 ### `async publish(key, isRelease)`
@@ -50,7 +53,11 @@ DB接続、MarkdownItインスタンスの構築、`customfunc.mjs`の読み込�
 
 ### `async buildAll()`
 
-DBに登録済みの情報を元に、記事HTML・nav・index・タグindexを一括で再生成します。テンプレートを修正した後の反映などに使います。
+DBに登録済みの情報を元に、記事HTML・nav・index・タグindex・`alllist.json`を一括で再生成します。テンプレートを修正した後の反映などに使います。
+
+### `async buildAllList({ isStaging })`
+
+全記事の一覧JSON(`alllist.json`)を、`isStaging`が`true`ならstagingの、`false`ならcontentの直下に生成します。indexを再生成する処理(`import`/`publish`/`remove`/`removeAll`/`buildAll`)から両方が自動的に呼ばれるため、通常は個別に呼ぶ必要はありません。詳細は「記事一覧JSON(alllist.json)」を参照してください。
 
 ### `async genViewer()`
 
@@ -69,6 +76,57 @@ frontmatterの`meta.tags`(config.mjsの`frontmatter.meta.tags`で定義)にタ�
 - 各indexページの説明文直後にタグ一覧(件数付き、選択中タグは強調表示)が表示されます。先頭には常に「全体」(全記事一覧に戻るリンク)が入ります
 - 記事から使われなくなったタグのページは、次回の再生成時に自動的に削除されます
 - `frontmatter.meta.tags`のスキーマ自体を定義していないアプリでは、タグ機能全体が無効化されます(タグ一覧・タグページとも一切生成されません)
+
+## 記事一覧JSON(alllist.json)
+
+indexページを再生成するタイミング(`import`/`publish`/`unpublish`/`remove`/`removeAll`/`buildAll`)で毎回、全記事の一覧をまとめたJSONをstaging・contentそれぞれの直下に生成します。HTMLを解析することなく記事一覧を取得できるため、クライアントサイド検索・アーカイブページ・他アプリからの参照などに利用できます。
+
+- 生成先: `contents/alllist.json`、`staging/alllist.json`(`config.mjs`の`ALLLIST_FILE_NAME`で変更可、デフォルト`"alllist.json"`)
+- 対象記事の範囲はindexページと同じで、staging側は下書き＋公開済みを横断、content側は公開済みのみです
+- 記事は日時の降順(新しい順)に並びます
+- 対象記事が0件の場合はファイルを生成しません(生成の有無に関わらず既存ファイルは削除してから作り直すため、古い一覧が残ることはありません)
+
+出力される項目は以下の通りです。
+
+| フィールド | 内容 |
+|---|---|
+| `key` | 記事のDB key(importしたzipファイル名・フォルダ名) |
+| `frontmatter.core`の全項目 | `title`/`datetime`等。記事に書かれていない任意項目は出力されません |
+| `frontmatter.meta`のうち`listup: true`の項目 | 出力したいmeta項目のスキーマに`listup: true`を追加します(下記) |
+| `link` | 記事のURL。記事自身のrelease状態で決まるため、staging側の一覧に載っている公開済み記事のリンク先はcontent側の実URLになります |
+| `release` | 公開済みなら`true`、下書きなら`false` |
+
+```js
+"meta": {
+  "tags": {
+    "type": "array",
+    "items": { "type": "string" },
+    "required": false,
+    "listup": true    // ← この項目をalllist.jsonに出力する
+  }
+}
+```
+
+出力例:
+
+```json
+{
+  "count": 2,
+  "items": [
+    {
+      "key": "20260126",
+      "title": "たぬき表示テストです。",
+      "datetime": "20260126 15:00",
+      "tags": ["テスト", "たぬき"],
+      "link": "/staging/2026/20260126/",
+      "release": false
+    }
+  ]
+}
+```
+
+- `key`/`link`/`release`はpossgが必ず出力する予約フィールドです。frontmatterに同名の項目を定義した場合、そちらは出力対象から除外されます(コンソールに警告を出します)
+- `title`/`datetime`以外の`core`項目は、その記事を**importした時点**の値がDBに保存されます。後から`core`項目を追加した場合、既存記事の値は再importするまで`alllist.json`に現れません(`buildAll()`はDBの内容だけを使い、frontmatterの再解析は行いません)
 
 ## staging/release(下書き/公開)モデル
 
@@ -176,11 +234,12 @@ possg geneditor [-static] [-title <title>]
 |---|---|
 | `WWW_DIR` / `CONTENT_DIR` / `STAGING_DIR` | 出力先ディレクトリ構成 |
 | `TAGS_DIR` | タグ別indexの出力先フォルダ名(省略時`"tags"`) |
+| `ALLLIST_FILE_NAME` | 全記事一覧JSONのファイル名(省略時`"alllist.json"`) |
 | `TEMPLATE_DIR` / `TEMPLATE_FILE_NAME` / `IDX_TEMPLATE_FILE_NAME` | テンプレートの場所とファイル名 |
 | `CUSTOMFUNC_DIR` / `CUSTOMFUNC_FILE_NAME` | customfunc.mjsの場所 |
 | `CONTENT_URL_BASE` / `STAGING_URL_BASE` | 公開/下書きページのURLベース |
 | `ICON_URL` / `CSS_URL` / `JS_URL` | favicon・possg.css・possg.jsのURL(いずれも省略可。無い場合はテンプレート側で該当タグ自体が出力されません) |
-| `frontmatter` | frontmatterのスキーマ定義(`core`は必須項目、`meta`は任意項目。`meta.tags`を定義するとタグ機能が有効になります) |
+| `frontmatter` | frontmatterのスキーマ定義(`core`は必須項目、`meta`は任意項目。`meta.tags`を定義するとタグ機能が有効になります。`meta`の各項目に`listup: true`を付けると`alllist.json`に出力されます) |
 | `INDEX_PAGE_SIZE` | 記事一覧の1ページあたりの件数 |
 | `THUMBNAIL` | サムネイル生成サイズ(`width`/`height`) |
 | `DEFAULT_TRIM` | geneditorの画像トリミングツールの初期クロップサイズ(`width`/`height`)。未設定・不正な場合は`1280`x`720`にフォールバック |
