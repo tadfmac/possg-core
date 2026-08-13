@@ -85,6 +85,7 @@ Every time the index pages are regenerated (`import`/`publish`/`unpublish`/`remo
 - The set of articles covered matches the index pages: the staging side spans drafts plus published articles, while the content side holds published ones only
 - Articles are sorted by datetime, newest first
 - If there are no articles to list, no file is generated (the existing file is always removed before regenerating, whether or not a new one is written, so a stale list is never left behind)
+- **`alllist.json` is generated before the HTML of the index and tag index pages.** That means an index template can call a method in your `customfunc.mjs` that reads `alllist.json` and builds part of the page from it — it always reads the current contents
 
 The fields written out are:
 
@@ -127,6 +128,36 @@ Example output:
 
 - `key`/`link`/`release` are reserved fields possg always writes. If you define a frontmatter field with one of those names, that field is excluded from the output (with a console warning)
 - `core` fields other than `title`/`datetime` are stored in the DB **at import time**. If you add a `core` field later, existing articles won't show a value for it in `alllist.json` until they are re-imported (`buildAll()` only uses what's in the DB — it never re-parses front matter)
+
+### Reading it from an index template
+
+The index template (`index-template.ejs`) is handed the absolute path of the `alllist.json` it should read, in a variable named `alllistPath`, along with `isStaging` telling it which side the page belongs to.
+
+- `alllistPath` always points at the `alllist.json` sitting directly under staging or content. Tag index pages are written under `tags/<tag name>/`, but the path they get is **the root of the side they belong to**, not their own output directory
+- When there are no articles to list, `alllist.json` doesn't exist at all, so check for it before reading
+
+```ejs
+<%- func.renderArchive(alllistPath, isStaging) %>
+```
+
+The source of `customfunc.mjs` is embedded **in its entirety, verbatim** into the HTML that `genviewer`/`geneditor` generate, and it runs in the browser too (as a classic `<script>`). So even for a method only ever called from an index template, putting an ES Module import like `import fs from "fs"` at the top of the file makes the browser throw a syntax error, leaving the `customFunc` class undefined and `viewer.html`/`editor.html` dead. Obtain `fs` without an import statement, on Node only:
+
+```js
+// customfunc.mjs
+const nodeFs = (typeof process !== "undefined" && process.getBuiltinModule)
+  ? process.getBuiltinModule("node:fs") : null;   // null in the browser
+
+class customFunc {
+  renderArchive(alllistPath, isStaging){
+    if (!nodeFs) return "";                          // do nothing on the viewer/editor (browser) side
+    if (!nodeFs.existsSync(alllistPath)) return "";  // no file when there are no articles
+    const alllist = JSON.parse(nodeFs.readFileSync(alllistPath, "utf8"));
+    // ...build your HTML from alllist
+  }
+}
+```
+
+`process.getBuiltinModule()` is available from Node 20.16/22.3 onwards.
 
 ## Staging/Release Model
 

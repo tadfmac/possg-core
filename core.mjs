@@ -1247,14 +1247,16 @@ ${escapeScriptClose(editorRuntimeSrc)}
     await this.#cleanIndexPages(this.CONTENT_ROOT);
     await fs.remove(path.join(this.STAGING_ROOT, this.TAGS_DIR));
     await fs.remove(path.join(this.CONTENT_ROOT, this.TAGS_DIR));
+    // indexページ・タグindexのHTMLはcustomfunc経由でalllist.jsonを参照できるため、
+    // それらのレンダリングより前にalllist.jsonを作り直しておく
+    await this.buildAllList({ isStaging: true });
+    await this.buildAllList({ isStaging: false });
     await this.buildIndex({ isStaging: true });
     await this.buildIndex({ isStaging: false });
     if (this.#tagsEnabled()) {
       await this.buildTagIndexes({ isStaging: true });
       await this.buildTagIndexes({ isStaging: false });
     }
-    await this.buildAllList({ isStaging: true });
-    await this.buildAllList({ isStaging: false });
   }
   // alllist.jsonに出力するfrontmatter項目名を、config.mjsのスキーマから決める。
   // coreは全項目、metaは`listup: true`の項目のみが対象。possgが必ず出力する
@@ -1374,6 +1376,14 @@ ${escapeScriptClose(editorRuntimeSrc)}
 
     const totalPages = Math.max(1,Math.ceil(sorted.length / this.INDEX_PAGE_SIZE));
 
+    // customfuncからalllist.jsonを読めるようにテンプレートへ渡す絶対パス。
+    // タグindexの出力先はtags/<タグ名>/配下だが、alllist.jsonは常にstaging・content
+    // それぞれの直下にあるため、outDirではなくisStagingから解決する
+    const alllistPath = path.join(
+      isStaging ? this.STAGING_ROOT : this.CONTENT_ROOT,
+      this.ALLLIST_FILE_NAME
+    );
+
     await fs.ensureDir(outDir);
 
     for (let page = 1; page <= totalPages; page++) {
@@ -1412,6 +1422,8 @@ ${escapeScriptClose(editorRuntimeSrc)}
           gaid: this.GA_ID,
           tags,
           currentTag,
+          isStaging,
+          alllistPath,
           currentPage: page,
           totalPages,
           prevPage: page > 1 ? page - 1 : null,

@@ -85,6 +85,7 @@ indexページを再生成するタイミング(`import`/`publish`/`unpublish`/`
 - 対象記事の範囲はindexページと同じで、staging側は下書き＋公開済みを横断、content側は公開済みのみです
 - 記事は日時の降順(新しい順)に並びます
 - 対象記事が0件の場合はファイルを生成しません(生成の有無に関わらず既存ファイルは削除してから作り直すため、古い一覧が残ることはありません)
+- **`alllist.json`はindexページ・タグindexページのHTMLより先に生成されます。** そのためindexテンプレートから`customfunc.mjs`のメソッドを呼び、その中で`alllist.json`を読んでページを組み立てられます(常にその時点の最新の内容が読めます)
 
 出力される項目は以下の通りです。
 
@@ -127,6 +128,36 @@ indexページを再生成するタイミング(`import`/`publish`/`unpublish`/`
 
 - `key`/`link`/`release`はpossgが必ず出力する予約フィールドです。frontmatterに同名の項目を定義した場合、そちらは出力対象から除外されます(コンソールに警告を出します)
 - `title`/`datetime`以外の`core`項目は、その記事を**importした時点**の値がDBに保存されます。後から`core`項目を追加した場合、既存記事の値は再importするまで`alllist.json`に現れません(`buildAll()`はDBの内容だけを使い、frontmatterの再解析は行いません)
+
+### indexテンプレートから読む
+
+indexテンプレート(`index-template.ejs`)には、読むべき`alllist.json`の絶対パスが変数`alllistPath`として渡されます。あわせて、そのページがstaging側かcontent側かを示す`isStaging`も渡されます。
+
+- `alllistPath`は常にstaging・contentそれぞれの直下の`alllist.json`を指します。タグindexページの出力先は`tags/<タグ名>/`配下ですが、そこではなく**そのページが属する側のルート**のパスになります
+- 対象記事が0件のときは`alllist.json`自体が存在しないため、読む前に存在チェックをしてください
+
+```ejs
+<%- func.renderArchive(alllistPath, isStaging) %>
+```
+
+`customfunc.mjs`のソースは`genviewer`/`geneditor`が生成するHTMLに**ファイル全体がそのまま埋め込まれ、ブラウザ上でも実行されます**(クラシックな`<script>`として)。そのため、indexテンプレートからしか呼ばないメソッドであっても、ファイルの先頭に`import fs from "fs"`のようなES Moduleのimport文を書くとブラウザ側で構文エラーになり、`customFunc`クラス自体が未定義になって`viewer.html`/`editor.html`が動かなくなります。import文を使わず、Node上でのみ`fs`を取得する形にしてください。
+
+```js
+// customfunc.mjs
+const nodeFs = (typeof process !== "undefined" && process.getBuiltinModule)
+  ? process.getBuiltinModule("node:fs") : null;   // ブラウザではnullになる
+
+class customFunc {
+  renderArchive(alllistPath, isStaging){
+    if (!nodeFs) return "";                          // viewer/editor(ブラウザ)側では何もしない
+    if (!nodeFs.existsSync(alllistPath)) return "";  // 記事0件のときはファイルが無い
+    const alllist = JSON.parse(nodeFs.readFileSync(alllistPath, "utf8"));
+    // ...alllistを使ってHTMLを組み立てる
+  }
+}
+```
+
+`process.getBuiltinModule()`はNode 20.16/22.3以降で使えます。
 
 ## staging/release(下書き/公開)モデル
 
